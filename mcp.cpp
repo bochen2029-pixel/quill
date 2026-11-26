@@ -227,16 +227,18 @@ std::string mcp_handle(const std::string& line) {
         const JV* name = params && params->t == JV::Obj ? params->get("name") : nullptr;
         if (!name || !name->is_str()) return reply_error(id, -32602, "tools/call needs params.name");
         const JV* arguments = params->get("arguments");
+        // an error answer names the verb, as on the command line: quill_prove -> prove
+        const std::string verb = name->s.rfind("quill_", 0) == 0 ? name->s.substr(6) : name->s;
         Answer a;
         std::string plain;
         try {
             a = call_tool(name->s, arguments, plain);
         } catch (const Fail& f) {
-            a = error_answer(name->s, f);
+            a = error_answer(verb, f);
         } catch (const std::bad_alloc&) {
-            a = error_answer(name->s, Fail("E_LIMIT", "out of memory", "a smaller cap, or a smaller network"));
+            a = error_answer(verb, Fail("E_LIMIT", "out of memory", "a smaller cap, or a smaller network"));
         } catch (const std::exception& e) {
-            a = error_answer(name->s, Fail("E_INTERNAL", std::string("an internal error: ") + e.what()));
+            a = error_answer(verb, Fail("E_INTERNAL", std::string("an internal error: ") + e.what()));
         }
         JV item = JV::object(), content = JV::array(), r = JV::object();
         item.set("type", "text").set("text", a.status != "error" && !plain.empty() ? plain : answer_json(a));

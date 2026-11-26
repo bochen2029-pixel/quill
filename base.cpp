@@ -368,11 +368,15 @@ std::string narrow(const wchar_t* w) {
     return s;
 }
 
+// The system's own words for an error, in English when Windows has them (output stays ASCII), with the code.
 static std::string win_error(DWORD code) {
     wchar_t buf[512] = L"";
-    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0, buf, 511, nullptr);
+    const DWORD flags = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+    if (!FormatMessageW(flags, nullptr, code, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), buf, 511, nullptr))
+        FormatMessageW(flags, nullptr, code, 0, buf, 511, nullptr);
     std::string s = trim(narrow(buf));
-    return s.empty() ? ssprintf("error %lu", (unsigned long)code) : s;
+    while (!s.empty() && s.back() == '.') s.pop_back();
+    return s.empty() ? ssprintf("Windows error %lu", (unsigned long)code) : s + ssprintf(" (Windows error %lu)", (unsigned long)code);
 }
 
 bool read_file(const std::string& path, std::string& out, std::string& err) {

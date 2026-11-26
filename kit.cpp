@@ -233,7 +233,7 @@ Answer verb_check_kit(const std::string& dir, const Source* spec) {
     in.set("probe_hidden_sha256", sha256_hex(hid_bytes)).set("probe_dump_sha256", sha256_hex(dump_text)).set("meta_sha256", sha256_hex(meta_text));
     a.input.set("verb", "check-kit").set("input", in).set("spec", spec ? JV(sha256_hex(spec->text)) : JV());
     a.text = ssprintf("check-kit %s: %s, grade checked: %s rows in %zu sessions; hidden %s, margin %s, 8-bit margin %s", net.name.c_str(),
-                      all ? "ok" : "MISMATCH", commas(rows).c_str(), sessions, sci(hid_max).c_str(), sci(re_max).c_str(), sci(q8_run_max).c_str());
+                      all ? "ok" : "REFUTED", commas(rows).c_str(), sessions, sci(hid_max).c_str(), sci(re_max).c_str(), sci(q8_run_max).c_str());
     if (spec) a.text += ssprintf("; specification %s decides alike on %s of %s rows", sm.net.name.c_str(), commas(agree).c_str(), commas(rows).c_str());
     a.text += "\n";
     for (const auto& c : checks)

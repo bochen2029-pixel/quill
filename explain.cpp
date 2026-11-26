@@ -448,7 +448,9 @@ JV explain_json(const Model& m) {
     }
     o.set("notes", notes).set("warnings", warns);
     if (!m.spec_text.empty()) {
-        const Spec s = parse_spec(m.spec_text);
+        Spec s = parse_spec(m.spec_text);
+        s.rotate = m.rotated;                                // as built: a --rotate or --no-rotate override decides, not the text
+        s.seed = m.seed;
         JV sugar = JV::array();
         for (size_t g = 0; g < s.sugar.size(); ++g) {
             JV lines = JV::array();
@@ -471,8 +473,8 @@ std::string explain_markdown(const Model& m) {
     if (const JV* h = m.input.get("sha256")) o += " (sha256 " + h->s + ")";
     else if (const JV* w = m.input.get("weights_sha256")) o += " (weights.npz sha256 " + w->s + ")";
     o += ".\n\n";
-    o += ssprintf("Width %d, %d neurons in %zu rules, %zu tokens, %zu named fields, %zu weights (%zu not zero). ", m.net.d, m.net.n,
-                  m.rules.size(), T, F, m.net.weights(), m.net.nonzero());
+    o += ssprintf("Width %d, %d neurons in %zu rules, %zu tokens, %zu named fields, %s weights (%s not zero). ", m.net.d, m.net.n,
+                  m.rules.size(), T, F, commas(m.net.weights()).c_str(), commas(m.net.nonzero()).c_str());
     o += m.rotated ? (m.seed_known ? "Rotated basis, seed " + std::to_string(m.seed) + ": each field lies along a direction, not a coordinate.\n"
                                    : std::string("Rotated basis: each field lies along a direction, not a coordinate.\n"))
                    : std::string("Axis-aligned: each field is one coordinate.\n");
@@ -555,7 +557,9 @@ std::string explain_markdown(const Model& m) {
     }
 
     if (!m.spec_text.empty()) {
-        const Spec s = parse_spec(m.spec_text);
+        Spec s = parse_spec(m.spec_text);
+        s.rotate = m.rotated;                                // as built: a --rotate or --no-rotate override decides, not the text
+        s.seed = m.seed;
         if (!s.sugar.empty()) {
             o += "\n## Expansions\n\nEach shorthand statement, and the primitive statements quill wrote for it.\n";
             for (size_t g = 0; g < s.sugar.size(); ++g) {

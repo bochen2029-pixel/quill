@@ -1527,13 +1527,4 @@ Model model_from_folder(const Folder& f) {
     return m;
 }
 
-Model model_from_path(const std::string& path, int rotate_mode, unsigned long long seed) {
-    if (is_dir(path)) {
-        if (rotate_mode) throw Fail("E_ARGS", "--rotate and --no-rotate apply to a specification; '" + path + "' is a folder that is already built");
-        return model_from_folder(load_folder(path));
-    }
-    if (!is_file(path)) throw Fail("E_IO", "'" + path + "' is neither a specification file nor a network folder");
-    return model_from_text(slurp(path, "the specification"), rotate_mode, seed);
-}
-
 }  // namespace quill

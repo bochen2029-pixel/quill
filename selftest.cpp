@@ -389,23 +389,78 @@ void test_kit_specs(Suite& t) {
 }
 
 // ---- 200 random machines ---------------------------------------------------------------------------------
+// Each machine is written as a model might write one. Per token: every move listed; or `*->t` alone; or
+// `*->t` with some states overriding it; or only some states listed, the others holding. A token may share
+// its line with an earlier token (`on t0, t3: ...`), the moves of a token may be split over two lines, and
+// the start state is random. The plain simulation applies the language's own rule: a listed move, else the
+// token's `*`, else the state holds.
 void test_machines(Suite& t) {
     Rng rng(20261129);
     size_t steps = 0, wrong = 0, unproved = 0, rotated = 0, neurons_min = ~(size_t)0, neurons_max = 0;
+    size_t with_star = 0, with_hold = 0, with_shared = 0;
     std::string first_bad;
     for (int i = 0; i < 200; ++i) {
-        const int S = 2 + (int)rng.below(7), T = 2 + (int)rng.below(5);
+        const int S = 2 + (int)rng.below(7), T = 2 + (int)rng.below(5), init = (int)rng.below((uint32_t)S);
+        const auto cell = [&](int s, int e) { return (size_t)s * (size_t)T + (size_t)e; };
+        std::vector<int> wild((size_t)T, -1), ex((size_t)S * (size_t)T, -1), same_as((size_t)T, -1);
+        for (int e = 0; e < T; ++e) {
+            if (e > 0 && rng.below(4) == 0) {                      // the same moves as an earlier token, on one line with it
+                const int src = (int)rng.below((uint32_t)e);
+                same_as[(size_t)e] = same_as[(size_t)src] >= 0 ? same_as[(size_t)src] : src;
+                wild[(size_t)e] = wild[(size_t)src];
+                for (int s = 0; s < S; ++s) ex[cell(s, e)] = ex[cell(s, src)];
+                continue;
+            }
+            const uint32_t mode = rng.below(4);
+            if (mode == 1 || mode == 2) wild[(size_t)e] = (int)rng.below((uint32_t)S);
+            for (int s = 0; s < S; ++s)
+                if (mode == 0 || (mode == 2 && rng.below(3) == 0) || (mode == 3 && rng.below(2) == 0)) ex[cell(s, e)] = (int)rng.below((uint32_t)S);
+        }
         std::vector<int> delta((size_t)S * (size_t)T);
-        for (auto& v : delta) v = (int)rng.below((uint32_t)S);
+        bool star = false, hold = false, shared = false;
+        for (int e = 0; e < T; ++e) {
+            star = star || wild[(size_t)e] >= 0;
+            shared = shared || same_as[(size_t)e] >= 0;
+            for (int s = 0; s < S; ++s) {
+                const int x = ex[cell(s, e)];
+                delta[cell(s, e)] = x >= 0 ? x : wild[(size_t)e] >= 0 ? wild[(size_t)e] : s;
+                hold = hold || (x < 0 && wild[(size_t)e] < 0);
+            }
+        }
+        with_star += star;
+        with_hold += hold;
+        with_shared += shared;
         std::vector<char> emit((size_t)S);
         for (auto& v : emit) v = rng.below(2) != 0;
         std::string spec = "net m" + std::to_string(i) + "\ntokens";
         for (int e = 0; e < T; ++e) spec += " t" + std::to_string(e);
-        spec += "\nmachine S states=" + std::to_string(S) + " init=0\n";
-        for (int e = 0; e < T; ++e) {
-            spec += "  on t" + std::to_string(e) + ":";
-            for (int s = 0; s < S; ++s) spec += " " + std::to_string(s) + "->" + std::to_string(delta[(size_t)s * (size_t)T + (size_t)e]);
-            spec += "\n";
+        spec += "\nmachine S states=" + std::to_string(S) + (init > 0 || rng.below(2) ? " init=" + std::to_string(init) : std::string()) + "\n";
+        for (int r = 0; r < T; ++r) {
+            if (same_as[(size_t)r] >= 0) continue;
+            std::string toks = "t" + std::to_string(r);
+            for (int e = r + 1; e < T; ++e)
+                if (same_as[(size_t)e] == r) toks += ", t" + std::to_string(e);
+            std::vector<std::string> moves;
+            for (int s = 0; s < S; ++s)
+                if (ex[cell(s, r)] >= 0) moves.push_back(std::to_string(s) + "->" + std::to_string(ex[cell(s, r)]));
+            const std::string any = wild[(size_t)r] >= 0 ? "*->" + std::to_string(wild[(size_t)r]) : std::string();
+            std::vector<std::string> lines;                       // each line: some of the token's transitions
+            const uint32_t how = rng.below(3);
+            if (how == 0 || (any.empty() && moves.size() < 2)) {
+                std::string all = any;
+                for (const auto& mv : moves) all += (all.empty() ? "" : " ") + mv;
+                if (!all.empty()) lines.push_back(all);
+            } else if (!any.empty() && !moves.empty()) {
+                lines.push_back(how == 1 ? any : join(moves, " "));
+                lines.push_back(how == 1 ? join(moves, " ") : any);
+            } else if (!any.empty()) {
+                lines.push_back(any);
+            } else {
+                const size_t cut = 1 + rng.below((uint32_t)moves.size() - 1);
+                lines.push_back(join(std::vector<std::string>(moves.begin(), moves.begin() + (std::ptrdiff_t)cut), " "));
+                lines.push_back(join(std::vector<std::string>(moves.begin() + (std::ptrdiff_t)cut, moves.end()), " "));
+            }
+            for (const auto& l : lines) spec += "  on " + toks + ": " + l + "\n";
         }
         std::string listed;
         for (int s = 0; s < S; ++s)
@@ -421,7 +476,7 @@ void test_machines(Suite& t) {
             std::vector<double> state((size_t)K.padded());
             K.load(m.net.r0.data(), state.data());
             const int f0 = m.field("S.0");
-            int cur = 0;
+            int cur = init;
             size_t bad_here = 0;
             for (int k = 0; k < 1500; ++k, ++steps) {
                 const int tok = (int)rng.below((uint32_t)T);
@@ -439,6 +494,7 @@ void test_machines(Suite& t) {
             Moore table;
             table.label = "its table";
             table.tokens = m.net.tokens;
+            table.start = init;
             table.states = S;
             table.next = delta;
             table.emit = emit;
@@ -454,7 +510,9 @@ void test_machines(Suite& t) {
     }
     t.check(wrong == 0, ssprintf("200 random machines (2 to 8 states, 2 to 6 tokens) built from machine statements: state and decision equal a plain "
                                  "simulation on 1,500 random tokens each (%s steps; %zu of the machines rotated)", commas(steps).c_str(), rotated),
-            wrong ? ssprintf("%zu steps differ; ", wrong) + first_bad : ssprintf("%zu to %zu neurons", neurons_min, neurons_max));
+            wrong ? ssprintf("%zu steps differ; ", wrong) + first_bad
+                  : ssprintf("%zu to %zu neurons; * in %zu machines, unlisted pairs that hold in %zu, several tokens on one line in %zu", neurons_min,
+                             neurons_max, with_star, with_hold, with_shared));
     t.check(unproved == 0, "the same 200 machines: each proved exact and proved equivalent to its transition table on every token sequence",
             unproved ? ssprintf("%zu not proved; ", unproved) + first_bad : std::string());
 }
@@ -525,6 +583,18 @@ void test_proofs(Suite& t) {
                 "weights that are not exact in binary: the same network is graded checked, not proved, and reported as rounded");
     }
     {
+        // The readout has its own inexact flag. R5 weighs each copy by the double nearest 4/3 per row: 8/3 is rounded once, when
+        // the weights are stored, and with those stored weights the margin is exactly 3.9999999999999996, computed without rounding.
+        // A readout of 1e-20*A + B - 0.5 does round, while its states stay exact.
+        const Answer r5 = verb_prove(inline_spec(example("R5_redundant")->text), ProveOptions(), nullptr);
+        const Answer tiny = verb_prove(inline_spec("net tiny\ntokens a b\nlatch A toggle=a\nlatch B toggle=b\nreadout 1e-20*A + B - 0.5\n"), ProveOptions(), nullptr);
+        t.check(r5.grade == "proved" && dig_str(r5.result, { "decisions", "arithmetic" }) == "exact" &&
+                    dig_num(r5.result, { "decisions", "min_abs_margin" }) == 3.9999999999999996 && tiny.grade == "proved" &&
+                    dig_str(tiny.result, { "arithmetic" }) == "exact" && dig_str(tiny.result, { "decisions", "arithmetic" }) == "rounded",
+                "the readout has its own inexact flag: R5's margin is exactly 3.9999999999999996 with its stored weights (8/3 rounded once, when "
+                "stored); a readout of 1e-20*A + B - 0.5 rounds while its states stay exact");
+    }
+    {
         const Answer a = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr), b = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr);
         const JV ra = receipt_json(a), rb = receipt_json(b);
         JV parsed;
@@ -557,6 +627,23 @@ void test_surfaces(Suite& t) {
         t.check(ok && refused, "run: names and positions mix (\"zero one, 1 two one\" gives hold emit hold hold emit); an unknown token is refused");
     }
     {
+        RunOptions o;                                             // --random 7 --repeat 3 is the same 7 random tokens three times
+        o.have_random = true;
+        o.random_n = 7;
+        o.seed = 5;
+        o.repeat = 3;
+        o.show = 21;
+        const Answer r = verb_run(inline_spec(example("R2_quotient")->text), o);
+        o.repeat = 1;
+        o.show = 7;
+        const Answer once = verb_run(inline_spec(example("R2_quotient")->text), o);
+        const JV* rows = dig(r.result, { "rows" });
+        const JV* first = dig(once.result, { "rows" });
+        bool ok = rows && first && rows->arr.size() == 21 && first->arr.size() == 7 && dig_int(r.result, { "steps" }) == 21;
+        for (size_t k = 0; ok && k < 21; ++k) ok = dig_str(rows->arr[k], { "token" }) == dig_str(first->arr[k % 7], { "token" });
+        t.check(ok, "run: --random 7 --repeat 3 runs the same 7 random tokens three times over, the state carried on");
+    }
+    {
         const Model m = model_from_text(example("parity_latch")->text);
         const std::string md = explain_markdown(m);
         const JV j = explain_json(m);
@@ -568,7 +655,14 @@ void test_surfaces(Suite& t) {
         ok = ok && lines >= (size_t)m.net.n;
         const Firing f = firing(model_from_text(example("R5_redundant")->text), 0);
         ok = ok && f.known && f.when == "on one when s1=0, s2=0 | s1=0, s3=0 | s2=0, s3=0" && f.z == std::vector<double>{ 1.5, 3.5 };
-        t.check(ok, "explain: a line per neuron, when each rule fires read off its weights, and what each shorthand statement expands to");
+        // the whole network in primitive statements is the network as built, also when --rotate overrides the text
+        const Model rot = model_from_text(example("parity")->text, 2, 7);
+        const std::string expanded = dig_str(explain_json(rot), { "expanded" });
+        const Model back = model_from_text(expanded);
+        ok = ok && contains(expanded, "\nrotate 7\n") && back.rotated && back.net.W1 == rot.net.W1 && back.net.W2 == rot.net.W2 && back.net.E == rot.net.E &&
+             back.net.r0 == rot.net.r0 && back.net.Wout == rot.net.Wout && back.net.b1 == rot.net.b1;
+        t.check(ok, "explain: a line per neuron, when each rule fires read off its weights, what each shorthand statement expands to, and the "
+                    "network in primitive statements, which rebuilds it bit for bit (also rotated by --rotate)");
     }
     {
         std::vector<float> row(40);
@@ -612,7 +706,7 @@ void test_surfaces(Suite& t) {
         req.set("params", params);
         ok = ok && call(json_compact(req)) && dig_true(r, { "result", "isError" }) &&
              json_parse(dig(r, { "result", "content" })->arr[0].get("text")->s, answer, err) && dig_str(answer, { "error", "code" }) == "E_SPEC" &&
-             dig_int(answer, { "error", "line" }) == 4 && dig_int(answer, { "error", "column" }) == 12;
+             dig_int(answer, { "error", "line" }) == 4 && dig_int(answer, { "error", "column" }) == 12 && dig_str(answer, { "verb" }) == "prove";
         params.set("name", "quill_explain");
         args = JV::object();
         args.set("spec", example("parity")->text);

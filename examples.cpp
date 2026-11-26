@@ -230,7 +230,8 @@ const char* language_card() {
         "  width 32                         optional: default is fields + 4 spares, rounded up to 8, at least 32\n"
         "  in.TOKEN is a ready-made field that is 1 while that token is read: quill declares, embeds and clears it.\n"
         "  An expression is a sum of number*field terms and numbers; + - * / and parentheses, linear in the fields.\n"
-        "  Every rule reads the state as it was before the step: one rule cannot read what another writes.\n"
+        "  Every rule reads the state with the token already added and before any rule writes: one rule cannot read\n"
+        "  what another writes in the same step.\n"
         "\nEXAMPLE\n") + [] {
             std::string out;
             for (const char* p = kParityIn; *p;) {

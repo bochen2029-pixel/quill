@@ -149,9 +149,7 @@ struct Model {
 
 Model model_from_spec(const Spec& s, bool allow_rotate);
 Model model_from_folder(const Folder& f);
-// SPEC or DIR: a folder is loaded, a file is parsed as a specification. `rotate_mode`: 0 as written,
-// 1 force axis-aligned, 2 force the seed below.
-Model model_from_path(const std::string& path, int rotate_mode = 0, unsigned long long seed = 0);
+// A specification's text. `rotate_mode`: 0 as written, 1 force axis-aligned, 2 force the seed below.
 Model model_from_text(const std::string& spec_text, int rotate_mode = 0, unsigned long long seed = 0);
 
 // ---- folders and explanations (explain.cpp) -------------------------------------------------------

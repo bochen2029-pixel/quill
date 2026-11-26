@@ -53,7 +53,8 @@ struct Enum {
     std::vector<RuleStat> rule;
     std::vector<Hit> ramps, dirties;
     size_t ramp_total = 0, dirty_total = 0, transitions = 0;
-    bool capped = false, exact_arith = true;
+    bool capped = false, exact_arith = true;   // no operation of any state update rounded
+    bool exact_margins = true;                 // no operation of any readout (margin) rounded
     double residual = 0, max_offset = 0, outside = 0;
     int exhaustive_depth = 0, max_depth = 0;
     int N() const { return (int)parent.size(); }
@@ -289,7 +290,12 @@ Enum enumerate(const Checker& ck, size_t cap) {
     }
     if (!e.capped) e.exhaustive_depth = e.max_depth + 1;
     e.margin.resize((size_t)e.N());
-    for (int i = 0; i < e.N(); ++i) e.margin[(size_t)i] = K.margin(e.state(i));
+    for (int i = 0; i < e.N(); ++i) {                         // the readout of every clean state, under the inexact flag
+        if (e.dirty[(size_t)i]) { e.margin[(size_t)i] = K.margin(e.state(i)); continue; }
+        _clearfp();
+        e.margin[(size_t)i] = K.margin(e.state(i));
+        if (_statusfp() & _SW_INEXACT) e.exact_margins = false;
+    }
     return e;
 }
 
@@ -614,7 +620,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         else if (e.capped) {
             line += ssprintf("; STOPPED at the cap of %s states: every token sequence of up to %d tokens was covered", commas(opt.cap).c_str(), e.exhaustive_depth);
             r.set("exhaustive_to_depth", e.exhaustive_depth);
-        } else line += ssprintf("; %zu of them %s not clean and %s not followed further", e.dirty_total, e.dirty_total == 1 ? "is" : "are", e.dirty_total == 1 ? "was" : "were");
+        } else line += ssprintf("; %s state%s not clean and %s not followed further", commas(e.dirty_total).c_str(), e.dirty_total == 1 ? " is" : "s are",
+                                e.dirty_total == 1 ? "was" : "were");
         results.set("reachable", r);
         fold(holds, grade);
         lines.push_back("reachable    " + line + "   [" + grade + "]");
@@ -655,8 +662,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         } else if (ck.taus.empty()) line = "the network has no threshold";
         else {
             const RuleStat& st = e.rule[(size_t)min_rule];
-            line = ssprintf("%s %s threshold%s outside (0, 1) at every state and token; smallest distance %s (", holds == 1 ? "all" : "so far all",
-                            commas(ck.taus.size()).c_str(), ck.taus.size() == 1 ? " stays" : "s stay", show(min_dist).c_str()) +
+            line = ssprintf("all %s threshold%s outside (0, 1) at every %sstate and token; smallest distance %s (", commas(ck.taus.size()).c_str(),
+                            ck.taus.size() == 1 ? " stays" : "s stay", holds == 1 ? "" : "explored ", show(min_dist).c_str()) +
                    rule_ref(m, min_rule) + " at z = " + show(st.z_at) + ", state " + state_text(m, e.state(st.state)) + ", token " +
                    m.net.tokens[(size_t)st.token] + ")";
             if (min_dist <= kTol)
@@ -742,6 +749,7 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
     }
 
     // 5. equivalence
+    bool other_inexact = false;                              // the other side closed only within the tolerance
     if (other_in) {
         Moore other = *other_in;
         if (other.tokens != m.net.tokens) {                   // put its columns in this network's token order
@@ -760,6 +768,7 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         }
         const Moore mine = moore_of(m, e);
         const Equiv q = equivalence(mine, other);
+        other_inexact = !other.exact;
         const std::string grade = q.holds == 1 ? weakest(base, other.exact ? "proved" : "checked")
                                   : q.holds == 0 ? weakest(witness, other.exact ? "proved" : "checked") : "undecided";
         JV r = JV::object();
@@ -816,11 +825,13 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         JV dj = JV::object();
         dj.set("emit_states", (unsigned long long)emits).set("hold_states", (unsigned long long)(counted - emits));
         dj.set("min_abs_margin", counted ? JV(dmin) : JV()).set("margins", JV::numbers(values));
+        dj.set("arithmetic", e.exact_margins ? "exact" : "rounded");
         dj.set("note", "counted over the states that some token leads to: a decision is made after a token");
         res.set("decisions", dj);
         if (counted)
-            lines.push_back(ssprintf("decisions    emit in %s state%s, hold in %s; smallest |margin| %s", commas(emits).c_str(), emits == 1 ? "" : "s",
-                                     commas(counted - emits).c_str(), show(dmin).c_str()));
+            lines.push_back(ssprintf("decisions    emit in %s state%s, hold in %s; smallest |margin| %s%s", commas(emits).c_str(), emits == 1 ? "" : "s",
+                                     commas(counted - emits).c_str(), show(dmin).c_str(),
+                                     e.exact_margins ? "" : " (the readout rounds in float64; the margins are shown to 1e-9)"));
     }
     {
         JV rules = JV::array();
@@ -958,7 +969,9 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
     std::string head = "prove " + m.net.name + ": " + (p.status == "ok" ? "ok" : p.status == "refuted" ? "REFUTED" : "UNDECIDED") + ", grade " + p.grade;
     if (p.status == "ok" && build) head += " (the logic is " + base + "; its rotated float64 build is checked to 1e-9)";
     else if (p.status == "ok" && p.grade == "checked")
-        head += " (enumerated in float64 to a tolerance of 1e-9: complete, but rounding keeps it short of a proof)";
+        head += base == "checked" || !other_inexact
+                    ? " (enumerated in float64 to a tolerance of 1e-9: complete, but rounding keeps it short of a proof)"
+                    : " (this network closes bit for bit; the other side of the equivalence closes only to a tolerance of 1e-9 in float64)";
     p.text = head + "\n";
     for (const auto& l : lines) p.text += "  " + l + "\n";
     for (const auto& w : warnings.arr) p.text += "  warning      " + w.get("code")->s + (w.get("line")->t == JV::Int ? ssprintf(" (line %lld)", w.get("line")->i) : std::string()) + ": " + w.get("message")->s + "\n";

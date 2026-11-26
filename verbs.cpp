@@ -96,9 +96,10 @@ Source source_from_path(const std::string& path, int rotate_mode, unsigned long 
     s.rotate_mode = rotate_mode;
     s.seed = seed;
     if (is_dir(path)) return s;
-    if (!is_file(path)) throw Fail("E_IO", "'" + path + "' is neither a specification file nor a network folder");
+    std::string err;
+    if (!read_file(path, s.text, err))
+        throw Fail("E_IO", "cannot read '" + path + "': " + err, "give a specification file, or a network folder (weights.npz and network.json)");
     s.is_text = true;
-    s.text = slurp(path, "the specification");
     return s;
 }
 
@@ -198,6 +199,7 @@ Answer verb_prove(const Source& src, const ProveOptions& opt, const Source* equi
         if (!equiv->is_text) {
             const Model om = load_model(*equiv);
             other = moore_from_model(om, opt.cap);
+            other.label = "the folder's network " + om.net.name;
             other_input.set("kind", "folder").set("name", om.net.name).set("input", om.input);
         } else {
             const size_t first = equiv->text.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
@@ -210,6 +212,7 @@ Answer verb_prove(const Source& src, const ProveOptions& opt, const Source* equi
             } else {
                 const Model om = model_from_text(equiv->text, 1, 0);      // its logic: rotation does not change decisions
                 other = moore_from_model(om, opt.cap);
+                other.label = "the specification " + om.net.name;
                 other_input.set("kind", "specification").set("name", om.net.name).set("sha256", sha256_hex(equiv->text));
             }
         }
@@ -309,7 +312,14 @@ Answer verb_run(const Source& src, const RunOptions& o) {
     for (const auto& tn : net.tokens) name_w = std::max(name_w, tn.size());
     while (done < steps) {
         const size_t n = (size_t)std::min<unsigned long long>(chunk, steps - done);
-        for (size_t k = 0; k < n; ++k) tbuf[k] = o.have_random ? (int32_t)rng.below((uint32_t)T) : toks[(size_t)((done + k) % base)];
+        for (size_t k = 0; k < n; ++k) {
+            if (!o.have_random) {
+                tbuf[k] = toks[(size_t)((done + k) % base)];
+                continue;
+            }
+            if ((done + k) % base == 0) rng = Rng(o.seed);        // each repetition draws the same N tokens again
+            tbuf[k] = (int32_t)rng.below((uint32_t)T);
+        }
         double* st = state.data();
         const double t0 = now_ms();
         if (dumping)
@@ -352,6 +362,7 @@ Answer verb_run(const Source& src, const RunOptions& o) {
     dump.close();
     margins.close();
     const double seconds = elapsed_ms / 1000.0;
+    const bool timed = seconds >= 0.001;                      // under a millisecond the clock says more about itself than about the kernel
     a.result.set("name", net.name).set("steps", steps).set("emit", emits).set("hold", steps - emits);
     a.result.set("margin_min", steps ? JV(mmin) : JV()).set("margin_max", steps ? JV(mmax) : JV());
     a.result.set("start", start).set("shown", (unsigned long long)rows.arr.size()).set("rows", rows);
@@ -362,7 +373,7 @@ Answer verb_run(const Source& src, const RunOptions& o) {
     options.set("repeat", o.repeat).set("random", o.have_random ? JV(o.random_n) : JV()).set("seed", o.have_random ? JV(o.seed) : JV());
     options.set("start", o.have_start ? JV(sha256_hex(o.start_bytes)) : JV()).set("start_row", o.have_start ? JV(o.start_row) : JV()).set("show", o.show);
     a.input.set("verb", "run").set("input", m.input).set("options", options);
-    a.meta.set("seconds", seconds).set("steps_per_second", seconds > 0 ? JV(std::floor((double)steps / seconds)) : JV());
+    a.meta.set("seconds", seconds).set("steps_per_second", timed ? JV(std::floor((double)steps / seconds)) : JV());
     a.meta.set("kernel", K.sparse() ? "sparse" : "dense");
     if (dumping) a.meta.set("dump", o.dump_path);
     if (!o.margins_path.empty()) a.meta.set("margins", o.margins_path);
@@ -374,9 +385,10 @@ Answer verb_run(const Source& src, const RunOptions& o) {
         if (steps > rows.arr.size()) a.text += ssprintf("  ... %s more steps not listed (--show N lists more)\n", commas(steps - rows.arr.size()).c_str());
     }
     if (m.F()) a.text += "  final state " + state_text(m, state.data()) + "\n";
-    a.text += seconds > 0 ? ssprintf("  %s steps per second (%s steps in %.6f s, one thread, %s kernel)\n", commas((unsigned long long)((double)steps / seconds)).c_str(),
-                                     commas(steps).c_str(), seconds, K.sparse() ? "sparse" : "dense")
-                          : std::string("  too few steps to time\n");
+    a.text += timed ? ssprintf("  %s steps per second (%s steps in %.6f s, one thread, %s kernel)\n", commas((unsigned long long)((double)steps / seconds)).c_str(),
+                               commas(steps).c_str(), seconds, K.sparse() ? "sparse" : "dense")
+                    : ssprintf("  speed not measured: %s step%s took under a millisecond (--repeat K runs the sequence K times over)\n", commas(steps).c_str(),
+                               steps == 1 ? "" : "s");
     if (dumping) a.text += "  states written to " + o.dump_path + ssprintf(" (float32, %zu values per step)\n", d);
     if (!o.margins_path.empty()) a.text += "  margins written to " + o.margins_path + " (float64, one per step)\n";
     return a;
