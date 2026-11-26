@@ -473,8 +473,10 @@ std::string explain_markdown(const Model& m) {
     if (const JV* h = m.input.get("sha256")) o += " (sha256 " + h->s + ")";
     else if (const JV* w = m.input.get("weights_sha256")) o += " (weights.npz sha256 " + w->s + ")";
     o += ".\n\n";
-    o += ssprintf("Width %d, %d neurons in %zu rules, %zu tokens, %zu named fields, %s weights (%s not zero). ", m.net.d, m.net.n,
-                  m.rules.size(), T, F, commas(m.net.weights()).c_str(), commas(m.net.nonzero()).c_str());
+    const auto count = [](size_t n, const char* one, const char* many) { return commas(n) + " " + (n == 1 ? one : many); };
+    o += "Width " + std::to_string(m.net.d) + ", " + count((size_t)m.net.n, "neuron", "neurons") + " in " + count(m.rules.size(), "rule", "rules") + ", " +
+         count(T, "token", "tokens") + ", " + count(F, "named field", "named fields") + ", " + count(m.net.weights(), "weight", "weights") + " (" +
+         commas(m.net.nonzero()) + " not zero). ";
     o += m.rotated ? (m.seed_known ? "Rotated basis, seed " + std::to_string(m.seed) + ": each field lies along a direction, not a coordinate.\n"
                                    : std::string("Rotated basis: each field lies along a direction, not a coordinate.\n"))
                    : std::string("Axis-aligned: each field is one coordinate.\n");

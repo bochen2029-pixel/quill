@@ -268,6 +268,18 @@ void test_language(Suite& t) {
         t.check(ok, "fields in.TOKEN declares that token's input field where it stands; quill embeds and clears it, and the text printed back rebuilds the network", why);
     }
     {
+        bool ok = false;
+        std::string why;
+        try {
+            const Built a = assemble(parse_spec("net c\ntokens a, b\nfields A, B\nembed a A, B\ntau A, B <- 2*in.b - 0.5\nclear A, B\nemit A, B\n"));
+            const Built b = assemble(parse_spec("net c\ntokens a b\nfields A B\nembed a A B\ntau A B <- 2*in.b - 0.5\nclear A B\nemit A B\n"));
+            ok = a.net.E == b.net.E && a.net.W1 == b.net.W1 && a.net.b1 == b.net.b1 && a.net.W2 == b.net.W2 && a.net.Wout == b.net.Wout && a.net.n == 8;
+        } catch (const Fail& f) {
+            why = f.first().message;
+        }
+        t.check(ok, "lists (tokens, fields, embed, tau targets, clear, emit) take spaces or commas alike", why);
+    }
+    {
         std::string fields28, fields27;
         for (int k = 0; k < 28; ++k) fields28 += " f" + std::to_string(k);
         for (int k = 0; k < 27; ++k) fields27 += " f" + std::to_string(k);
@@ -567,7 +579,8 @@ void test_proofs(Suite& t) {
         const JV* mc = dig(p.result, { "machines" });
         const bool ok = p.status == "ok" && p.grade == "proved" && dig_int(p.result, { "results", "reachable", "states" }) == 3 &&
                         dig_int(p.result, { "results", "reachable", "transitions" }) == 12 && mc && mc->arr.size() == 1 &&
-                        mc->arr[0].get("reachable")->arr.size() == 3 && dig(p.result, { "state_table" })->arr.size() == 3;
+                        mc->arr[0].get("reached")->arr.size() == 3 && mc->arr[0].get("not_reached")->arr.empty() && dig_true(mc->arr[0], { "complete" }) &&
+                        dig(p.result, { "state_table" })->arr.size() == 3;
         t.check(ok, "a counter modulo 3 with reset: 3 reachable count states, grade proved", p.text.substr(0, p.text.find('\n')));
     }
     {

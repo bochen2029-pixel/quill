@@ -349,6 +349,7 @@ struct Parser {
         std::vector<std::string> list;
         for (size_t i = 1; i < t.size(); ++i) {
             const Tok& k = t[i];
+            if (k.is(",")) continue;
             if (k.kind == Tok::Punct || !token_name_ok(k.text))
                 fail(k.col, "'" + k.text + "' is not a token name: use letters, digits and '_', separated by spaces");
             if (std::find(list.begin(), list.end(), k.text) != list.end()) fail(k.col, "the token '" + k.text + "' is listed twice");
@@ -359,6 +360,7 @@ struct Parser {
                      "`run --tokens` accepts names and positions alike");
             list.push_back(k.text);
         }
+        if (list.empty()) fail(end_col(), "tokens needs at least one token name", "for example: tokens zero one");
         if ((int)list.size() > kMaxTokens) fail(t[0].col, ssprintf("more than %d tokens", kMaxTokens));
         s.tokens = std::move(list);
         tokens_line = line;
@@ -382,8 +384,11 @@ struct Parser {
             if (!made.empty()) push(Op::Fields).fields = made;
             made.clear();
         };
+        size_t named = 0;
         for (size_t i = 1; i < t.size(); ++i) {
             const Tok& k = t[i];
+            if (k.is(",")) continue;
+            ++named;
             if (k.kind != Tok::Punct && k.text.size() > 3 && k.text.compare(0, 3, "in.") == 0) {
                 // A token's input field, declared here so that its coordinate comes here; quill still embeds and clears it.
                 need_tokens(k.col);
@@ -400,6 +405,7 @@ struct Parser {
             check_new_field(k);
             made.push_back(add_field(k.text, FieldDecl::Declared, k.col));
         }
+        if (!named) fail(end_col(), "fields needs at least one field name", "for example: fields A B");
         flush();
     }
     void st_embed() {
@@ -407,6 +413,7 @@ struct Parser {
         const int tok = token_of(t[1]);
         std::vector<int> into;
         for (size_t i = 2; i < t.size(); ++i) {
+            if (t[i].is(",")) continue;
             const int f = written_field(t[i], "write");
             if (std::find(embeds.begin(), embeds.end(), std::make_pair(tok, f)) != embeds.end())
                 fail(t[i].col, "the token '" + s.tokens[(size_t)tok] + "' already adds 1 to '" + s.fields[(size_t)f].name +
@@ -414,6 +421,7 @@ struct Parser {
             embeds.emplace_back(tok, f);
             into.push_back(f);
         }
+        if (into.empty()) fail(end_col(), "embed takes a token and the field it adds 1 to", "for example: embed one in1");
         Op& op = push(Op::Embed);
         op.token = tok;
         op.fields = into;

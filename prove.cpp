@@ -618,7 +618,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
             line += e.residual == 0 ? std::string("; the set is closed bit for bit") + (e.exact_arith ? ", in exact arithmetic" : " (float64 rounding occurred)")
                                     : "; the set is closed to " + sci(e.residual) + " (float64, tolerance 1e-9)";
         else if (e.capped) {
-            line += ssprintf("; STOPPED at the cap of %s states: every token sequence of up to %d tokens was covered", commas(opt.cap).c_str(), e.exhaustive_depth);
+            line += ssprintf("; STOPPED at the cap of %s state%s: every token sequence of up to %d token%s was covered", commas(opt.cap).c_str(),
+                             opt.cap == 1 ? "" : "s", e.exhaustive_depth, e.exhaustive_depth == 1 ? "" : "s");
             r.set("exhaustive_to_depth", e.exhaustive_depth);
         } else line += ssprintf("; %s state%s not clean and %s not followed further", commas(e.dirty_total).c_str(), e.dirty_total == 1 ? " is" : "s are",
                                 e.dirty_total == 1 ? "was" : "were");
@@ -695,7 +696,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
             line = "FAILS: " + hit_text(m, h);
             if (e.dirty_total > 1) line += ssprintf("; %zu unclean states in all", e.dirty_total);
         } else {
-            line = ssprintf("every one of the %zu named fields is 0 or 1 in every %sstate", F, holds == 1 ? "" : "explored ");
+            line = F == 1 ? ssprintf("the only named field is 0 or 1 in every %sstate", holds == 1 ? "" : "explored ")
+                          : ssprintf("every one of the %zu named fields is 0 or 1 in every %sstate", F, holds == 1 ? "" : "explored ");
             if (e.max_offset > 0) line += " (to within " + sci(e.max_offset) + ")";
             if (e.outside > kTol) {
                 line += "; the states also hold up to " + sci(e.outside) + " outside the named fields";
@@ -876,11 +878,14 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
                 const auto& vals = seen[(size_t)(mc.first_field + s)];
                 (std::find(vals.begin(), vals.end(), 1.0) != vals.end() ? reach : unreached).push(s);
             }
+            // "never reached" is a claim only when the enumeration is complete; otherwise it is what was seen so far
             JV x = JV::object();
-            x.set("name", mc.name).set("states", mc.states).set("reachable", reach).set("unreachable", unreached);
+            x.set("name", mc.name).set("states", mc.states).set("complete", closed).set("reached", reach).set("not_reached", unreached);
             machines.push(x);
-            lines.push_back(ssprintf("machine %-4s %zu of its %d states are reachable", mc.name.c_str(), reach.arr.size(), mc.states) +
-                            (unreached.arr.empty() ? std::string() : " (never reached: " + json_compact(unreached) + ")"));
+            lines.push_back(ssprintf("machine %-4s %zu of its %d states %s", mc.name.c_str(), reach.arr.size(), mc.states,
+                                     closed ? "are reachable" : "were reached before the enumeration stopped") +
+                            (unreached.arr.empty() ? std::string()
+                                                   : (closed ? " (never reached: " : " (not reached so far: ") + json_compact(unreached) + ")"));
         }
         res.set("machines", machines);
     }

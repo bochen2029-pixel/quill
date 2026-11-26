@@ -167,9 +167,10 @@ Answer verb_build(const Source& spec, const std::string& out_dir, bool force) {
     }
     const JV sz = sizes_json(m.net);
     a.text = "build " + m.net.name + ": " + (out_dir.empty() ? std::string("assembled, nothing written (no -o DIR)") : "wrote " + out_dir + " (weights.npz, network.json, manifest.json, EXPLAIN.md)") + "\n";
-    a.text += ssprintf("  width %d, %d neurons in %zu rules, %zu named fields, %s weights (%s not zero), %s\n", m.net.d, m.net.n, m.rules.size(), m.fields.size(),
-                       commas(m.net.weights()).c_str(), commas(m.net.nonzero()).c_str(),
-                       m.rotated ? ssprintf("rotated with seed %llu", m.seed).c_str() : "axis-aligned");
+    const auto count = [](size_t k, const char* one, const char* many) { return commas(k) + " " + (k == 1 ? one : many); };
+    a.text += "  width " + std::to_string(m.net.d) + ", " + count((size_t)m.net.n, "neuron", "neurons") + " in " + count(m.rules.size(), "rule", "rules") + ", " +
+              count(m.fields.size(), "named field", "named fields") + ", " + count(m.net.weights(), "weight", "weights") + " (" + commas(m.net.nonzero()) +
+              " not zero), " + (m.rotated ? ssprintf("rotated with seed %llu", m.seed) : std::string("axis-aligned")) + "\n";
     a.text += "  weights.npz sha256 " + wsha + "\n";
     a.text += warnings_text(m.warnings);
     return a;
