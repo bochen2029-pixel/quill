@@ -1,0 +1,12 @@
+# build products (build.bat regenerates them)
+obj/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.res
+*.log
+
+# throwaway oracles and test output; never part of the tool
+_scratch/
+out/

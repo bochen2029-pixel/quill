@@ -1,0 +1,4 @@
+# Specifications and JSON are hashed byte for byte: git must never touch their line endings.
+* text=auto eol=lf
+*.bat text eol=crlf
+specs/** -text

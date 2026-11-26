@@ -1,0 +1,2 @@
+{"name": "mod3", "tokens": ["zero", "one", "two", "three"],
+ "delta": [[0, 1, 0, 0], [0, 2, 1, 1], [0, 0, 2, 2]], "init": 0, "emit": [1, 2]}
