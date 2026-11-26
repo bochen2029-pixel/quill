@@ -77,11 +77,7 @@ std::string answer_json(const Answer& a) {
 
 static JV warnings_json(const std::vector<Issue>& ws) {
     JV a = JV::array();
-    for (const auto& w : ws) {
-        JV x = JV::object();
-        x.set("code", w.code).set("line", w.line ? JV(w.line) : JV()).set("message", w.message).set("hint", w.hint.empty() ? JV() : JV(w.hint));
-        a.push(x);
-    }
+    for (const auto& w : ws) a.push(warning_json(w));
     return a;
 }
 static std::string warnings_text(const std::vector<Issue>& ws) {

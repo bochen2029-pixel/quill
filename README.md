@@ -18,7 +18,7 @@ repository. quill reads and writes the kit's network folders (section 6), and ne
 the kit to build, to pass its self-test or to run; only `check-kit` reads the kit's article
 folders, each a network with a recorded run (section 4.5).
 
-Version 0.1.2 covers the **recurrent class**: one step per token, no attention.
+Version 0.1.3 covers the **recurrent class**: one step per token, no attention.
 C++20, operating-system APIs only, no third-party code, about 1.2 MB.
 
 It corrects two defects of earlier versions; `CHANGELOG.md` has the details:
@@ -26,6 +26,11 @@ It corrects two defects of earlier versions; `CHANGELOG.md` has the details:
   doubles that at every step and loses its bit after a few dozen steps (section 4.2, "How states,
   fields and thresholds are compared").
 - 0.1.1's `prove` read out of bounds, and could crash, when the start state itself is not clean.
+
+0.1.3 adds two things:
+- A warning, `W_ROUNDED_CONSTANT`, for every number that float64 cannot hold as written (3.5).
+- Rotated networks are now proved at the widest width, 4096, in a fraction of a second; 0.1.2 took
+  minutes there (section 6, "Rotation").
 
 This file is the contract: what every verb promises, exactly. Every example output below was
 printed by this version; only timings can differ from one run to the next.
@@ -48,7 +53,7 @@ prove parity: ok, grade proved
   noise        an error of up to 0.083333333 on every coordinate of the state cannot move a threshold into (0, 1); 0.144337567 in Euclidean norm; 0.25 on one coordinate alone (coordinates are fields)   [proved]
   sizes        width 32, 10 neurons, 844 weights (37 not zero), 37 operations per step (682 dense)   [proved]
   decisions    emit in 1 state, hold in 1; smallest |margin| 4
-  receipt      quill1:881624541aaa  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 41657ddd6140d967a5588de77ab80352e471b0091e05944f6d95431271528a1f
+  receipt      quill1:018fe4fdbeb6  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 41657ddd6140d967a5588de77ab80352e471b0091e05944f6d95431271528a1f
 
 $ quill run specs/parity.spec --tokens "one one skip one zero"
 run parity: 5 steps, 2 emit, 3 hold, margins from -4 to 4
@@ -96,7 +101,7 @@ prove fault_two_setters: REFUTED, grade proved
   (PowerShell does not run a script from the current folder by its bare name).
 - A clean build prints the twelve file names and `OK: quill.exe`. Any warning stops the build (`/WX`).
 - `/fp:strict` is deliberate: nothing is fused or reordered, and `prove` reads the processor's inexact flag.
-- `quill --selftest` then checks the executable from the inside (64 checks, about a second, no file written).
+- `quill --selftest` then checks the executable from the inside (68 checks, about a second, no file written).
   The last check compares a `specs/` folder beside the executable with the examples inside it; an
   executable with no `specs/` beside it (the release's `quill.exe` on its own) skips that check, says
   so, and runs 60.
@@ -165,6 +170,11 @@ Use weights that are exact in binary (2, 0.5, 2.5, 4, ...). Then no sum rounds a
 grade the network `proved`. With weights such as 2.2 and 0.7 the same network works, but its
 sums round and the grade is `checked`. With exact sums `prove` tolerates nothing: a threshold
 argument that lands 2^-40 inside (0, 1) is on its ramp, and is refuted as such (4.2).
+
+A number that float64 cannot hold is stored as the nearest double, and the network proved is the
+stored one. quill names each such number in a `W_ROUNDED_CONSTANT` warning (3.5): a literal such as
+`0.1` or `2.2`, a start value, or a combination of exact numbers that rounds, such as `8/3` or
+`-4.5 + 1/4503599627370496` (stored as `-4.5`).
 
 ### 3.2 Statements
 
@@ -295,6 +305,7 @@ Warnings do not stop a build and are listed in every answer:
 |---|---|
 | `W_NOT_CLEARED` | a tau or a token writes a field that is never cleared, so it grows |
 | `W_UNUSED_FIELD` | a declared field that nothing reads or writes and that starts at 0 |
+| `W_ROUNDED_CONSTANT` | a number on the line cannot be held by float64 as written. That is a literal (`0.1`, `2.2`, `1e-12`), a start value, or a coefficient whose numbers combine with rounding (`8/3`, `-4.5 + 1/4503599627370496`). Each is given as written, with the value stored and written minus stored (to first order for a combination). In JSON they are under `values`: `what`, `written` (null for a combination), `stored`, `difference`. The grade does not change: the proof is about the stored network |
 | `W_EDGE` | (prove) the threshold argument closest to (0, 1) has no room, or almost none: it lands exactly on 0 or 1; or within 1e-9 outside (0, 1), and the message says how far; or, when the arithmetic rounds, inside (0, 1) by no more than rounding explains there, and the message gives both numbers |
 | `W_MARGIN_ZERO` | (prove) a reachable state's margin is 0, or within 1e-9 of it: its decision has no room, and rests on rounding when the readout rounds; the message gives the margin in full |
 | `W_OUTSIDE` | (prove) reachable states hold something outside the named fields |
@@ -523,7 +534,7 @@ with `first_difference_row`.
 
 ### 4.7 `quill --selftest`, `--about`, `--mcp`
 
-- **`--selftest`** runs 64 checks and writes no file: known answers from zlib and numpy
+- **`--selftest`** runs 68 checks and writes no file: known answers from zlib and numpy
   (`selftest_vectors.h`); 25 faulty specifications and their messages; the language (expressions,
   lists, `in.TOKEN`) and its printed-back form; the kernel against its written definition; the five kit articles built, proved
   exact, byte-compared with the kit's own weight files (their hashes are inside the executable), and compared with the planted truth on
@@ -565,9 +576,9 @@ with `first_difference_row`.
 ### 5.1 One JSON object
 
 ```
-{"quill": "0.1.2", "verb": "prove", "status": "ok", "grade": "proved",
+{"quill": "0.1.3", "verb": "prove", "status": "ok", "grade": "proved",
  "result": {...}, "text": "prove parity: ok, grade proved",
- "receipt": {"id": "quill1:881624541aaa", "input_sha256": "...", "result_sha256": "..."},
+ "receipt": {"id": "quill1:018fe4fdbeb6", "input_sha256": "...", "result_sha256": "..."},
  "meta": {"ms": 0.16}}
 ```
 
@@ -646,7 +657,12 @@ A network folder is **exactly the planted kit's**, so quill and the kit read eac
   Gaussian matrix, columns signed so that R's diagonal is positive) on its own random stream
   (xoshiro256** seeded through splitmix64, Gaussians by the polar method), computed with `+ - * /`
   and `sqrt` only, so a seed gives the same bits on every machine. To compare with a kit article,
-  use the article's own weight file, or build axis-aligned.
+  use the article's own weight file, or build axis-aligned. Only the columns of Q that a build uses
+  are computed: the fields' and up to four spares for the manifest's true shams. Gram-Schmidt's
+  column j depends on columns 0 to j-1 alone, so they are bit for bit the whole matrix's leading
+  columns, and the Gaussian matrix is still drawn whole, in the same order. A rotated build at
+  width 4096 therefore takes a fraction of a second. 0.1.2 computed all 4096 columns, which took
+  minutes, and gives the same weights.
 - quill reads a folder's `manifest.json` for field names and directions, and nothing else from
   the kit's other files, except in `check-kit`.
 
@@ -673,7 +689,7 @@ Planned, not in this version:
 From the repository root, with the folder of the planted kit in the variable `QUILL_KIT`
 (`$QUILL_KIT/articles/R1_plain` is one of its article folders, section 4.5). Tests 3, 4 and 6 need
 the kit's articles, which are not part of this repository; the others need only this repository.
-Under each command is what it printed when version 0.1.2 was tagged (speeds vary with the
+Under each command is what it printed when version 0.1.3 was tagged (speeds vary with the
 machine's load).
 
 `bash tests/acceptance.sh` (Git Bash) runs tests 2 to 7 after a build: it prints each command with
@@ -705,7 +721,7 @@ ignores the copy) or from the environment.
 
    ```
    quill --selftest
-   SELFTEST: ALL PASS (64 checks)
+   SELFTEST: ALL PASS (68 checks)
    ```
 
 3. check-kit on the nine recurrent articles, `quill check-kit $QUILL_KIT/articles/NAME` for

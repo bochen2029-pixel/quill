@@ -855,6 +855,20 @@ std::string json_compact(const JV& v) {
     put(out, v, false);
     return out;
 }
+JV warning_json(const Issue& w) {
+    JV x = JV::object();
+    x.set("code", w.code).set("line", w.line ? JV(w.line) : JV()).set("message", w.message).set("hint", w.hint.empty() ? JV() : JV(w.hint));
+    if (!w.values.empty()) {
+        JV vs = JV::array();
+        for (const auto& v : w.values) {
+            JV o = JV::object();
+            o.set("what", v.what).set("written", v.written.empty() ? JV() : JV(v.written)).set("stored", v.stored).set("difference", v.difference);
+            vs.push(o);
+        }
+        x.set("values", vs);
+    }
+    return x;
+}
 std::string json_canonical(const JV& v) {
     std::string out;
     put(out, v, true);

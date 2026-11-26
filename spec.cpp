@@ -2,7 +2,10 @@
 // the weights, rotating the basis, and building the model that the verbs work on.
 #include "spec.h"
 
+#include <float.h>
+
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <unordered_map>
 
@@ -24,6 +27,114 @@ namespace {
 constexpr int kMaxFields = 4096, kMaxTokens = 4096, kMaxStates = 4096, kMaxWidth = 4096;
 constexpr unsigned long long kMaxSeed = 9007199254740991ull;      // 2^53 - 1: exact in every JSON reader
 const char* const kStatements = "net tokens fields embed init tau neuron clear readout emit latch machine on rotate width";
+
+// ---- exact decimal values, for W_ROUNDED_CONSTANT ----------------------------------------------------
+// A number >= 0 as 0.DIGITS x 10^exp, DIGITS with no leading or trailing zero ("" for zero). Integers only.
+struct Decimal {
+    std::string digits;
+    int exp = 0;
+    bool operator==(const Decimal& o) const { return digits == o.digits && (digits.empty() || exp == o.exp); }
+};
+Decimal trimmed(std::string digits, long long exp) {            // digits read as 0.DIGITS x 10^exp
+    const size_t lead = digits.find_first_not_of('0');
+    if (lead == std::string::npos) return {};
+    digits.erase(0, lead);
+    digits.erase(digits.find_last_not_of('0') + 1);
+    return { digits, (int)std::clamp(exp - (long long)lead, -100000LL, 100000LL) };
+}
+void big_mul(std::vector<uint32_t>& a, uint32_t m) {           // base 10^9, least significant limb first
+    uint64_t carry = 0;
+    for (auto& x : a) {
+        const uint64_t v = (uint64_t)x * m + carry;
+        x = (uint32_t)(v % 1000000000u);
+        carry = v / 1000000000u;
+    }
+    while (carry) {
+        a.push_back((uint32_t)(carry % 1000000000u));
+        carry /= 1000000000u;
+    }
+}
+// The exact decimal value of a finite double x >= 0: x = mant x 2^e, so x = mant x 5^-e / 10^-e when e < 0.
+Decimal exact_decimal(double x) {
+    if (!(x > 0) || !std::isfinite(x)) return {};
+    int e2 = 0;
+    const double f = std::frexp(x, &e2);                       // x = f x 2^e2, 0.5 <= f < 1: exact
+    uint64_t mant = (uint64_t)std::ldexp(f, 53);               // f has at most 53 significant bits
+    int e = e2 - 53;
+    while (mant % 2 == 0) {
+        mant /= 2;
+        ++e;
+    }
+    std::vector<uint32_t> big{ (uint32_t)(mant % 1000000000u) };
+    for (uint64_t r = mant / 1000000000u; r; r /= 1000000000u) big.push_back((uint32_t)(r % 1000000000u));
+    long long point = 0;
+    if (e >= 0)
+        for (int k = e; k > 0; k -= 31) big_mul(big, k >= 31 ? 2147483648u : (1u << k));
+    else {
+        for (int k = -e; k > 0; k -= 13) {
+            uint32_t m = 1;
+            for (int j = 0; j < std::min(k, 13); ++j) m *= 5;  // 5^13 = 1220703125 < 2^31
+            big_mul(big, m);
+        }
+        point = -e;
+    }
+    std::string s = std::to_string(big.back());
+    for (size_t i = big.size() - 1; i-- > 0;) s += ssprintf("%09u", big[i]);
+    return trimmed(s, (long long)s.size() - point);
+}
+// The exact value of a decimal literal as written: "2.5e-1", ".5", "4503599627370496".
+Decimal literal_decimal(std::string_view w) {
+    std::string digits;
+    long long point = -1;
+    size_t i = 0;
+    for (; i < w.size() && (isdigit((unsigned char)w[i]) || w[i] == '.'); ++i)
+        if (w[i] == '.') point = (long long)digits.size();
+        else digits += w[i];
+    if (point < 0) point = (long long)digits.size();
+    long long e10 = 0;
+    if (i < w.size() && (w[i] == 'e' || w[i] == 'E')) {
+        const std::string tail(w.substr(i + 1));
+        e10 = std::clamp(std::strtoll(tail.c_str(), nullptr, 10), -100000LL, 100000LL);
+    }
+    return trimmed(digits, point + e10);
+}
+// a - b for two decimals, rounded to a double (the difference of a literal and the double that holds it).
+double decimal_difference(const Decimal& a, const Decimal& b) {
+    const long long sa = a.exp - (long long)a.digits.size(), sb = b.exp - (long long)b.digits.size();
+    const long long s = std::min(a.digits.empty() ? sb : sa, b.digits.empty() ? sa : sb);
+    std::string x = a.digits.empty() ? "0" : a.digits + std::string((size_t)(sa - s), '0');
+    std::string y = b.digits.empty() ? "0" : b.digits + std::string((size_t)(sb - s), '0');
+    bool neg = false;
+    if (x.size() < y.size() || (x.size() == y.size() && x < y)) {
+        std::swap(x, y);
+        neg = true;
+    }
+    std::string r(x.size(), '0');
+    int borrow = 0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        int dx = x[x.size() - 1 - i] - '0' - borrow;
+        const int dy = i < y.size() ? y[y.size() - 1 - i] - '0' : 0;
+        borrow = dx < dy;
+        if (borrow) dx += 10;
+        r[r.size() - 1 - i] = (char)('0' + dx - dy);
+    }
+    const size_t lead = r.find_first_not_of('0');
+    if (lead == std::string::npos) return 0.0;
+    r.erase(0, lead);
+    const std::string head = r.substr(0, 17);
+    const std::string text = head + "e" + std::to_string(s + (long long)(r.size() - head.size()));
+    double v = 0;
+    std::from_chars(text.data(), text.data() + text.size(), v);
+    return neg ? -v : v;
+}
+// Whether one operation on numbers rounds: the processor's inexact flag around it (as prove reads it).
+template <class Op>
+double flagged(bool& inexact, Op op) {
+    _clearfp();
+    const double v = op();
+    if (_statusfp() & _SW_INEXACT) inexact = true;
+    return v;
+}
 
 bool field_name_ok(std::string_view s) {
     if (s.empty() || !(isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
@@ -240,20 +351,74 @@ struct Parser {
     }
 
     // ---- expressions: sums of weighted fields ----
+    // Each coefficient also carries what is written minus what float64 holds (to first order) and whether any
+    // rounding entered it, so that a constant float64 cannot hold is reported (W_ROUNDED_CONSTANT). The values
+    // themselves are computed exactly as before.
+    std::vector<IssueValue> rounded_now;                      // this statement's numbers that float64 cannot hold
+    static void add_to(double& c, double& err, bool& rounded, bool& op_rounded, double b, double berr, bool brounded) {
+        bool inexact = false;
+        const double a = c, s = flagged(inexact, [&] { return a + b; });
+        const double bb = s - a, e = (a - (s - bb)) + (b - bb);  // the exact error of a + b (two-sum)
+        c = s;
+        err += berr + e;
+        rounded = rounded || brounded || inexact;
+        op_rounded = op_rounded || inexact;
+    }
     static void accumulate(Lin& a, const Lin& b, double sign) {
         for (const auto& tb : b.terms) {
             bool found = false;
             for (auto& ta : a.terms)
-                if (ta.field == tb.field) { ta.coef += sign * tb.coef; found = true; break; }
-            if (!found) a.terms.push_back({ tb.field, sign * tb.coef });
+                if (ta.field == tb.field) {
+                    add_to(ta.coef, ta.err, ta.rounded, ta.op_rounded, sign * tb.coef, sign * tb.err, tb.rounded);
+                    ta.op_rounded = ta.op_rounded || tb.op_rounded;
+                    found = true;
+                    break;
+                }
+            if (!found) a.terms.push_back({ tb.field, sign * tb.coef, sign * tb.err, tb.rounded, tb.op_rounded });
         }
-        a.constant += sign * b.constant;
+        add_to(a.constant, a.cerr, a.crounded, a.cop_rounded, sign * b.constant, sign * b.cerr, b.crounded);
+        a.cop_rounded = a.cop_rounded || b.cop_rounded;
+    }
+    // c x (b +- berr), or c / (b +- berr): the product or quotient, and the first-order error. A coefficient that is
+    // exactly 0 stays exactly 0 whatever b is, so it takes on none of b's rounding.
+    static void scale(double& c, double& err, bool& rounded, bool& op_rounded, double b, double berr, bool brounded,
+                      bool bop_rounded, bool divide) {
+        bool inexact = false;
+        const double a = c;
+        if (a == 0 && err == 0 && !rounded) {
+            c = divide ? a / b : a * b;                            // 0 (or -0), as before
+            return;
+        }
+        op_rounded = op_rounded || bop_rounded;
+        if (divide) {
+            const double q = flagged(inexact, [&] { return a / b; });
+            c = q;
+            err = (err - q * berr) / b + std::fma(-q, b, a) / b;   // the remainder a - q b is exact (fma)
+        } else {
+            const double p = flagged(inexact, [&] { return a * b; });
+            c = p;
+            err = err * b + a * berr + std::fma(a, b, -p);       // the exact error of a x b (fma)
+        }
+        rounded = rounded || brounded || inexact;
+        op_rounded = op_rounded || inexact;
     }
     Lin primary() {
         if (p >= end) fail(end_col(), "the expression stops where a field or a number should be");
         const Tok k = t[p];
         Lin v;
-        if (k.kind == Tok::Number) { ++p; v.constant = k.value; return v; }
+        if (k.kind == Tok::Number) {
+            ++p;
+            v.constant = k.value;
+            const Decimal written = literal_decimal(k.text), stored = exact_decimal(k.value);
+            if (!(written == stored)) {                        // a literal float64 cannot hold
+                v.cerr = decimal_difference(written, stored);
+                v.crounded = true;
+                bool seen = false;
+                for (const auto& r : rounded_now) seen = seen || (r.what == "number" && r.written == k.text);
+                if (!seen) rounded_now.push_back({ "number", k.text, k.value, v.cerr });
+            }
+            return v;
+        }
         if (k.kind == Tok::Word) {
             ++p;
             if (!field_name_ok(k.text))
@@ -275,8 +440,12 @@ struct Parser {
         if (p < end && t[p].is("-")) {
             ++p;
             Lin v = unary();
-            for (auto& x : v.terms) x.coef = -x.coef;
+            for (auto& x : v.terms) {
+                x.coef = -x.coef;
+                x.err = -x.err;
+            }
             v.constant = -v.constant;
+            v.cerr = -v.cerr;
             return v;
         }
         if (p < end && t[p].is("+")) { ++p; return unary(); }
@@ -293,16 +462,14 @@ struct Parser {
                 if (divide) {
                     if (!b.terms.empty()) fail(col, "an expression can be divided by a number only, not by a field");
                     if (b.constant == 0) fail(col, "division by zero");
-                    for (auto& x : a.terms) x.coef /= b.constant;
-                    a.constant /= b.constant;
                 } else {
                     if (!a.terms.empty() && !b.terms.empty())
                         fail(col, "the product of two fields is not linear",
                              "a rule's argument is a weighted sum of fields; use a threshold on a sum to combine two fields");
                     if (a.terms.empty()) std::swap(a, b);           // a carries the fields, b is the number
-                    for (auto& x : a.terms) x.coef *= b.constant;
-                    a.constant *= b.constant;
                 }
+                for (auto& x : a.terms) scale(x.coef, x.err, x.rounded, x.op_rounded, b.constant, b.cerr, b.crounded, b.cop_rounded, divide);
+                scale(a.constant, a.cerr, a.crounded, a.cop_rounded, b.constant, b.cerr, b.crounded, b.cop_rounded, divide);
             } else if (p < end && (t[p].kind != Tok::Punct || t[p].is("("))) {
                 fail(t[p].col, "an operator is missing before '" + t[p].text + "'", "write 2*A for two times A");
             } else {
@@ -325,6 +492,13 @@ struct Parser {
         if (p >= end) fail(from < t.size() ? t[from].col : end_col(), std::string("the ") + what + " is missing");
         Lin v = sum();
         if (p < end) fail(t[p].col, "unexpected '" + t[p].text + "' after the " + what);
+        // A coefficient that an operation on numbers rounded (8/3, -4.5 + 2^-52): the literals were reported
+        // as they were read; this reports what their combination stored. A term that rounded to 0 is dropped
+        // below like any zero term, and reported here.
+        for (const auto& x : v.terms)
+            if (x.op_rounded || (x.coef == 0 && x.rounded && x.err != 0))
+                rounded_now.push_back({ "the weight of " + s.fields[(size_t)x.field].name, "", x.coef, x.err });
+        if (v.cop_rounded) rounded_now.push_back({ "the constant", "", v.constant, v.cerr });
         v.terms.erase(std::remove_if(v.terms.begin(), v.terms.end(), [](const Term& x) { return x.coef == 0; }), v.terms.end());
         return v;
     }
@@ -448,6 +622,12 @@ struct Parser {
             if (v >= t.size() || t[v].kind != Tok::Number)
                 fail(v < t.size() ? t[v].col : end_col(), "a number is expected after '" + name.text + "='");
             const int f = written_field(name, "set");
+            {
+                const Decimal written = literal_decimal(t[v].text), stored = exact_decimal(t[v].value);
+                if (!(written == stored))
+                    rounded_now.push_back({ "the start value of " + name.text, (sign < 0 ? "-" : "") + t[v].text, sign * t[v].value,
+                                            sign * decimal_difference(written, stored) });
+            }
             set_init(f, sign * t[v].value, name.col);
             fs.push_back(f);
             vs.push_back(sign * t[v].value);
@@ -1009,14 +1189,29 @@ struct Parser {
             const size_t hash = src.find('#');
             note = hash == std::string::npos ? std::string() : trim(std::string_view(src).substr(hash + 1));
             cur_sugar = -1;
+            rounded_now.clear();
             try {
                 lex(hash == std::string::npos ? src : src.substr(0, hash));
                 if (t.empty()) continue;
                 statement();
+                if (!rounded_now.empty()) warn_rounded();
             } catch (const Stop&) {
             }
         }
         finish();
+    }
+    // W_ROUNDED_CONSTANT: the numbers of this statement that float64 cannot hold, each with what is stored
+    void warn_rounded() {
+        std::string msg = "float64 cannot hold every number on this line, so the network keeps the nearest value: ";
+        for (size_t i = 0; i < rounded_now.size(); ++i) {
+            const IssueValue& r = rounded_now[i];
+            msg += (i ? "; " : "") + (r.what == "number" ? "`" + r.written + "`" : r.what + (r.written.empty() ? "" : " `" + r.written + "`")) +
+                   " is stored as " + ssprintf("%.17g", r.stored) + " (written minus stored: " + ssprintf("%.3g", r.difference) + ")";
+        }
+        msg += ". The proof is about the stored network";
+        warn(line, "W_ROUNDED_CONSTANT", msg,
+             "numbers that are exact in binary (2, 0.5, 2.5, 0.375, 1/4) are stored as written");
+        s.warnings.back().values = rounded_now;
     }
 };
 
@@ -1236,41 +1431,55 @@ double det_log(double x) {
 
 }  // namespace
 
-std::vector<double> rotation(int width, unsigned long long seed) {
-    const size_t d = (size_t)width;
+std::vector<double> rotation(int width, unsigned long long seed, int cols) {
+    // Only the first `cols` columns of Q are computed (all of them when cols >= width). Column j of Gram-Schmidt
+    // depends only on columns 0 to j-1 and on column j of the Gaussian matrix, so these columns are bit for bit the
+    // full rotation's. The Gaussian matrix is still drawn whole and in the same order, row by row, so that a seed
+    // means the same matrix; only the entries of the kept columns are stored, and the logarithm and square root are
+    // skipped for a pair of draws that lands in no kept column (the acceptance test needs u and v only).
+    // (Until 0.1.2 every column was computed: O(width^3), minutes at width 4096, for columns nothing used.)
+    const size_t d = (size_t)width, m = std::min(d, (size_t)std::max(cols, 0)), total = d * d;
     Rng rng(seed);
-    std::vector<double> g(d * d);
-    for (size_t k = 0; k < g.size();) {                        // Gaussians by the polar method, in pairs
+    std::vector<double> g(d * m);
+    for (size_t k = 0; k < total;) {                           // Gaussians by the polar method, in pairs
         const double u = 2.0 * rng.uniform() - 1.0, v = 2.0 * rng.uniform() - 1.0;
         const double sq = u * u + v * v;
         if (sq >= 1.0 || sq == 0.0) continue;
-        const double f = std::sqrt(-2.0 * det_log(sq) / sq);
-        g[k++] = u * f;
-        if (k < g.size()) g[k++] = v * f;
+        const bool second = k + 1 < total;
+        const bool keep0 = k % d < m, keep1 = second && (k + 1) % d < m;
+        if (keep0 || keep1) {
+            const double f = std::sqrt(-2.0 * det_log(sq) / sq);
+            if (keep0) g[(k / d) * m + k % d] = u * f;
+            if (keep1) g[((k + 1) / d) * m + (k + 1) % d] = v * f;
+        }
+        k += second ? 2 : 1;
     }
     // Gram-Schmidt on the columns, twice per column: the Q of the QR factorisation whose R has a
-    // positive diagonal, orthogonal to rounding error.
-    std::vector<double> q(d * d, 0.0), v(d);
-    for (size_t j = 0; j < d; ++j) {
-        for (size_t i = 0; i < d; ++i) v[i] = g[i * d + j];
+    // positive diagonal, orthogonal to rounding error. Row-major, row stride m.
+    std::vector<double> q(d * m, 0.0), v(d);
+    for (size_t j = 0; j < m; ++j) {
+        for (size_t i = 0; i < d; ++i) v[i] = g[i * m + j];
         for (int pass = 0; pass < 2; ++pass)
             for (size_t k = 0; k < j; ++k) {
                 double c = 0.0;
-                for (size_t i = 0; i < d; ++i) c += q[i * d + k] * v[i];
-                for (size_t i = 0; i < d; ++i) v[i] -= c * q[i * d + k];
+                for (size_t i = 0; i < d; ++i) c += q[i * m + k] * v[i];
+                for (size_t i = 0; i < d; ++i) v[i] -= c * q[i * m + k];
             }
         double nn = 0.0;
         for (size_t i = 0; i < d; ++i) nn += v[i] * v[i];
         const double norm = std::sqrt(nn);
         if (!(norm > 1e-9)) throw Fail("E_INTERNAL", "the rotation is degenerate for this seed; choose another seed");
-        for (size_t i = 0; i < d; ++i) q[i * d + j] = v[i] / norm;
+        for (size_t i = 0; i < d; ++i) q[i * m + j] = v[i] / norm;
     }
     return q;
 }
 
-Network rotated(const Network& a, const std::vector<double>& q) {
+Network rotated(const Network& a, const std::vector<double>& q, size_t m) {
     Network r = a;
     const size_t d = (size_t)a.d, n = (size_t)a.n, T = (size_t)a.T();
+    const auto column = [&](size_t f) {                       // q holds the first m columns of Q only
+        if (f >= m) throw Fail("E_INTERNAL", "a weight lies outside the columns of the rotation that were computed");
+    };
     // rows that multiply the state on the right: X' = X Q^T, summed over the field index in order
     const auto right = [&](const std::vector<double>& x, size_t rows) {
         std::vector<double> out(rows * d, 0.0);
@@ -1278,7 +1487,8 @@ Network rotated(const Network& a, const std::vector<double>& q) {
             for (size_t f = 0; f < d; ++f) {
                 const double c = x[k * d + f];
                 if (c == 0) continue;
-                for (size_t i = 0; i < d; ++i) out[k * d + i] += c * q[i * d + f];
+                column(f);
+                for (size_t i = 0; i < d; ++i) out[k * d + i] += c * q[i * m + f];
             }
         return out;
     };
@@ -1291,9 +1501,29 @@ Network rotated(const Network& a, const std::vector<double>& q) {
         for (size_t k = 0; k < n; ++k) {
             const double c = a.W2[f * n + k];
             if (c == 0) continue;
-            for (size_t i = 0; i < d; ++i) r.W2[i * n + k] += q[i * d + f] * c;
+            column(f);
+            for (size_t i = 0; i < d; ++i) r.W2[i * n + k] += q[i * m + f] * c;
         }
     return r;
+}
+
+// How many leading columns of Q a rotated build needs: every coordinate any weight or the start state touches
+// (the fields'), and up to four spares beyond the fields for the manifest's true shams.
+size_t rotation_columns(const Network& a, size_t fields) {
+    const size_t d = (size_t)a.d, n = (size_t)a.n;
+    size_t used = std::min(d, fields + 4);
+    const auto scan = [&](const std::vector<double>& x) {
+        for (size_t i = 0; i < x.size(); ++i)
+            if (x[i] != 0) used = std::max(used, i % d + 1);
+    };
+    scan(a.E);
+    scan(a.W1);
+    scan(a.Wout);
+    scan(a.r0);
+    for (size_t f = 0; f < d; ++f)
+        for (size_t k = 0; k < n; ++k)
+            if (a.W2[f * n + k] != 0) used = std::max(used, f + 1);
+    return used;
 }
 
 // ======================================================================
@@ -1413,18 +1643,19 @@ Model model_from_spec(const Spec& s, bool allow_rotate) {
     m.input.set("kind", "specification").set("sha256", s.sha256);
     const size_t d = (size_t)s.width, Fz = s.fields.size();
     if (s.rotate && allow_rotate) {
-        const std::vector<double> q = rotation(s.width, s.seed);
-        m.net = rotated(b.net, q);
+        const size_t cols = rotation_columns(b.net, Fz);
+        const std::vector<double> q = rotation(s.width, s.seed, (int)cols);
+        m.net = rotated(b.net, q, cols);
         m.rotated = true;
         m.seed = s.seed;
         m.seed_known = true;
         m.dirs.assign(Fz * d, 0.0);
         for (size_t f = 0; f < Fz; ++f)
-            for (size_t j = 0; j < d; ++j) m.dirs[f * d + j] = q[j * d + f];
+            for (size_t j = 0; j < d; ++j) m.dirs[f * d + j] = q[j * cols + f];
         m.notes.push_back("rotated by quill with seed " + std::to_string(s.seed) + ": every field lies along a column of Q");
         for (size_t f = Fz; f < d && f < Fz + 4; ++f) {            // unused directions, for the manifest's true shams
             m.sham_names.push_back("spare" + std::to_string(f - Fz));
-            for (size_t j = 0; j < d; ++j) m.sham_dirs.push_back(q[j * d + f]);
+            for (size_t j = 0; j < d; ++j) m.sham_dirs.push_back(q[j * cols + f]);
         }
     } else {
         m.net = std::move(b.net);

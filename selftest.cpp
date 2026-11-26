@@ -762,6 +762,65 @@ void test_proofs(Suite& t) {
         }
     }
     {
+        // W_ROUNDED_CONSTANT (0.1.3, raised by an outside review): a number float64 cannot hold is named with what is
+        // stored and how far it is from what is written, axis-aligned and rotated alike (it is about the text).
+        // Literals (2.2, 0.7, a start value 0.1) are reported as written; a combination of exact numbers that rounds
+        // (-4.5 + 2^-52, stored as -4.5) is reported as the coefficient it gives. The values themselves are unchanged.
+        const char* text = "net rc\ntokens a b\nfields A B\ninit A=0.1\ntau A <- 2.2*in.a - 0.7\n"
+                           "tau B <- 2*in.a + 2*B + 2*A - 4.5 + 1/4503599627370496\nclear A B\nreadout 8*A - 4\n";
+        for (int rot = 0; rot < 2; ++rot) {
+            const Answer p = verb_prove(inline_spec(std::string(text) + (rot ? "rotate 7\n" : "")), ProveOptions(), nullptr);
+            JV parsed;
+            std::string err;
+            bool ok = json_parse(answer_json(p), parsed, err);
+            std::vector<const JV*> ws;
+            if (const JV* w = dig(parsed, { "result", "warnings" }))
+                for (const auto& x : w->arr)
+                    if (dig_str(x, { "code" }) == "W_ROUNDED_CONSTANT") ws.push_back(&x);
+            const auto value = [&](size_t i, size_t k) -> const JV* {
+                const JV* v = i < ws.size() ? ws[i]->get("values") : nullptr;
+                return v && k < v->arr.size() ? &v->arr[k] : nullptr;
+            };
+            const auto near = [](double a, double b) { return std::fabs(a - b) <= 1e-15 * std::fabs(b); };
+            ok = ok && ws.size() == 3 && dig_int(*ws[0], { "line" }) == 4 && dig_int(*ws[1], { "line" }) == 5 && dig_int(*ws[2], { "line" }) == 6;
+            const JV *v0 = value(0, 0), *v1 = value(1, 0), *v2 = value(1, 1), *v3 = value(2, 0);
+            ok = ok && v0 && v1 && v2 && v3 && dig_str(*v0, { "what" }) == "the start value of A" && dig_str(*v0, { "written" }) == "0.1" &&
+                 dig_num(*v0, { "stored" }) == 0.1 && near(dig_num(*v0, { "difference" }), -5.5511151231257827e-18) &&
+                 dig_str(*v1, { "written" }) == "2.2" && dig_num(*v1, { "stored" }) == 2.2 && near(dig_num(*v1, { "difference" }), -1.7763568394002505e-16) &&
+                 dig_str(*v2, { "written" }) == "0.7" && dig_num(*v2, { "stored" }) == 0.7 && near(dig_num(*v2, { "difference" }), 4.4408920985006262e-17) &&
+                 dig_str(*v3, { "what" }) == "the constant" && dig_num(*v3, { "stored" }) == -4.5 && dig_num(*v3, { "difference" }) == 0x1p-52 &&
+                 contains(p.text, "W_ROUNDED_CONSTANT (line 6)") && contains(p.text, "the constant is stored as -4.5");
+            t.check(ok, std::string("W_ROUNDED_CONSTANT, ") + (rot ? "rotated" : "axis-aligned") +
+                            ": numbers float64 cannot hold are named with the value stored and the difference, in text and JSON",
+                    ok ? std::string() : p.text.substr(0, 400) + err);
+        }
+        size_t quiet = 0, examples = 0;                            // and nothing is said about numbers that are exact
+        for (const auto& name : { "R1_plain", "R2_quotient", "R3_overcomplete", "R4_two_bits", "parity", "parity_latch", "counter_mod3", "fault_ramp" }) {
+            ++examples;
+            const Answer p = verb_prove(inline_spec(example(name)->text), ProveOptions(), nullptr);
+            quiet += !contains(p.text, "W_ROUNDED_CONSTANT");
+        }
+        t.check(quiet == examples, "W_ROUNDED_CONSTANT is silent on specifications whose numbers are all exact in binary",
+                ssprintf("%zu of %zu silent", quiet, examples));
+    }
+    {
+        // The rotation (0.1.3): only the columns of Q that a build uses are computed, and they are bit for bit the
+        // whole matrix's leading columns (Gram-Schmidt's column j depends on columns 0..j-1 only). That made a
+        // rotated proof at width 4096 take a fraction of a second where 0.1.2 took minutes.
+        const int d = 96;
+        const std::vector<double> full = rotation(d, 7, d), part = rotation(d, 7, 11);
+        bool same = part.size() == (size_t)d * 11;
+        for (int i = 0; i < d && same; ++i)
+            for (int j = 0; j < 11 && same; ++j) same = std::memcmp(&part[(size_t)i * 11 + j], &full[(size_t)i * d + j], sizeof(double)) == 0;
+        const Answer p = verb_prove(inline_spec(std::string("width 4096\n") + example("R1_plain")->text), ProveOptions{}, nullptr);
+        const Answer r = verb_prove(inline_spec(std::string("width 4096\nrotate 7\n") + example("R1_plain")->text), ProveOptions{}, nullptr);
+        const JV* layer = dig(r.result, { "rotated" });
+        t.check(same && p.status == "ok" && r.status == "ok" && r.grade == "checked" && layer && layer->get("holds") &&
+                    layer->get("holds")->t == JV::Bool && layer->get("holds")->b && dig_int(r.result, { "results", "sizes", "width" }) == 4096,
+                "the rotation's computed columns equal the whole matrix's bit for bit; a rotated proof at width 4096 completes",
+                ssprintf("columns %s; %s/%s", same ? "equal" : "DIFFER", r.status.c_str(), r.grade.c_str()));
+    }
+    {
         const Answer a = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr), b = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr);
         const JV ra = receipt_json(a), rb = receipt_json(b);
         JV parsed;

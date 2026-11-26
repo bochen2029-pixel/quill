@@ -503,3 +503,55 @@ one-line patch. Each was read before anything in it was run.
     timeouts, all `width 4096` with `--rotate`: the known cost of a rotated proof at that width.
 - **Not changed** (CHANGELOG, "Known"): the rotated proof's cost at large widths; a constant that
   float64 cannot represent is rounded where it is stored, without a warning.
+
+## 2026-11-26, session 5: quill 0.1.3, the two known limits
+
+The owner approved a 0.1.3 for both, and the commissioning session gave it to the same writer.
+
+### 26. Rotated proofs at width 4096: where the time went, and why the fix is sound
+
+- **Measured first.** 0.1.2 took 0.35 s at width 512 and 2.8 s at width 1024 for R1_plain rotated, and
+  the build alone took as long as the proof. So the cost was in building the rotation, not in proving.
+- **The cause.** `rotation()` ran Gram-Schmidt twice over all `width` columns: O(width^3), striding
+  down columns of a row-major matrix. Every weight of a specification sits on a field's coordinate,
+  so `rotated()` reads only the fields' columns of Q, and the manifest reads up to four spares. At width
+  4096, with a dozen fields, 4,080 of the 4,096 columns were computed and never used.
+- **The fix.** `rotation(width, seed, cols)` computes the first `cols` columns, and
+  `rotation_columns()` says how many a build needs. It counts every coordinate any weight or the start
+  state touches, so a weight outside them would be caught as an internal error rather than read out
+  of bounds.
+- **Why the bits are the same.** Gram-Schmidt's column j is computed from columns 0 to j-1 and
+  Gaussian column j, in the same order of operations, so the kept columns are bit for bit the full
+  matrix's. The Gaussian matrix is still drawn whole and in the same order, so the seed means the same
+  matrix. The logarithm and square root are skipped only for draws whose two slots both fall outside
+  the kept columns; acceptance needs only u and v, so the stream is unchanged.
+- **The route that was not taken.** The proposal was a perturbation bound computed once per network,
+  instead of enumerating the rotated build. It was not needed: once the rotation is cheap, the
+  rotated enumeration at width 4096 takes 0.2 s. A bound for all lengths would also not hold in
+  float64, because rounding accumulates along directions nothing rewrites, which is the reason
+  `checked` exists. The proof is exactly as before; only unused work is gone.
+- **Checked.**
+  - The self-test compares the columns with the full matrix's at width 96.
+  - 18 rotated builds and proofs give hashes identical to 0.1.2's: weights, result, status, grade,
+    exit.
+  - The width-2048 and width-4096 cases were compared with 0.1.2 run to the end (CHANGELOG).
+  - R1_plain at width 1024 went from 2.8 s to 0.02 s, and at width 4096 a proof takes 0.2 s.
+
+### 27. W_ROUNDED_CONSTANT
+
+- **Literals.** A literal's exact decimal value is compared with the exact decimal expansion of its
+  double: x = m 2^e, so x = m 5^-e / 10^-e, computed in base-10^9 integers. They differ exactly when
+  float64 cannot hold the literal, and their difference is computed in decimal and then rounded.
+- **Combinations.** Each coefficient carries, beside its value, the rounding that entered it. An
+  operation on numbers rounds when the processor's inexact flag says so, read around that one
+  operation. The error itself is carried to first order with error-free transformations: two-sum for
+  `+ -`, an fma for `*`, and the exact remainder by fma for `/`.
+- **Two details.** A coefficient that is exactly 0 takes on none of a factor's rounding, since 0 times
+  anything is exact (an early draft flagged the constant of `8/3*in.b - 0.5`). A term that rounds to 0
+  and is dropped is still reported.
+- **Values unchanged.** The coefficients are computed by the same operations in the same order as
+  before; the extra bookkeeping only observes. 1,500 random specifications build to the same weights as
+  in 0.1.2.
+- **Where it shows.** One warning per line, in text and in JSON with `values`. The three warning
+  serializers now share `warning_json()`. Two shipped examples now carry it, correctly: R5 (8/3) and
+  `fault_edge_decimal` (1e-12).

@@ -777,11 +777,7 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         w.set("code", code).set("line", JV()).set("message", msg).set("hint", JV());
         warnings.push(w);
     };
-    for (const auto& w : m.warnings) {
-        JV x = JV::object();
-        x.set("code", w.code).set("line", w.line ? JV(w.line) : JV()).set("message", w.message).set("hint", w.hint.empty() ? JV() : JV(w.hint));
-        warnings.push(x);
-    }
+    for (const auto& w : m.warnings) warnings.push(warning_json(w));
 
     JV res = JV::object();
     res.set("name", m.net.name).set("input", m.input);

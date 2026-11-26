@@ -444,11 +444,7 @@ JV explain_json(const Model& m) {
     o.set("readout", ro);
     JV notes = JV::array(), warns = JV::array();
     for (const auto& s : m.notes) notes.push(s);
-    for (const auto& w : m.warnings) {
-        JV x = JV::object();
-        x.set("code", w.code).set("line", w.line ? JV(w.line) : JV()).set("message", w.message).set("hint", w.hint.empty() ? JV() : JV(w.hint));
-        warns.push(x);
-    }
+    for (const auto& w : m.warnings) warns.push(warning_json(w));
     o.set("notes", notes).set("warnings", warns);
     if (!m.spec_text.empty()) {
         Spec s = parse_spec(m.spec_text);

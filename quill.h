@@ -13,7 +13,7 @@
 
 namespace quill {
 
-constexpr const char* kVersion = "0.1.2";
+constexpr const char* kVersion = "0.1.3";
 
 // The one tolerance of the tool (BRIEF section 5), for arithmetic that rounds: two states may be merged,
 // a field is clean, and a threshold argument may be on an edge, only when the numbers agree to this.
@@ -25,11 +25,18 @@ std::string ssprintf(const char* f, ...);
 // ---- diagnostics -------------------------------------------------------------------------------
 // One problem with an input. `code` is stable (E_SPEC, E_ARGS, E_IO, E_FORMAT, E_UNSUPPORTED, E_LIMIT,
 // E_EXISTS, E_INTERNAL; W_* for warnings); line and column are 1-based, 0 when they do not apply.
+// A number an issue is about (W_ROUNDED_CONSTANT): what it is, how the input writes it ("" when it is no
+// single literal), the float64 value stored, and written minus stored.
+struct IssueValue {
+    std::string what, written;
+    double stored = 0, difference = 0;
+};
 struct Issue {
     std::string code, message;
     int line = 0, column = 0;
     std::string source;   // the offending line of the input, when there is one
     std::string hint;     // what to write instead, when quill can tell
+    std::vector<IssueValue> values;   // the numbers it is about, when there are some
 };
 
 // Thrown for anything wrong with the input. Carries every issue found, at least one.
@@ -143,6 +150,8 @@ struct JV {
 bool json_parse(std::string_view text, JV& out, std::string& err);
 std::string json_compact(const JV& v);                   // one line, insertion order
 std::string json_canonical(const JV& v);                 // RFC 8785: sorted keys, shortest numbers
+// A warning as one JSON object: code, line, message, hint, and its values when it has some.
+JV warning_json(const Issue& w);
 std::string json_pretty(const JV& v, int indent = 1);    // for files people read
 
 }  // namespace quill

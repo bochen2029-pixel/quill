@@ -9,10 +9,16 @@ namespace quill {
 struct Term {
     int field = 0;
     double coef = 0;
+    // While a specification is read (W_ROUNDED_CONSTANT): what is written minus what float64 holds, to first
+    // order; whether any rounding entered the coefficient; and whether an operation on numbers rounded.
+    double err = 0;
+    bool rounded = false, op_rounded = false;
 };
 struct Lin {
     std::vector<Term> terms;     // in the order first written; no field twice, no zero coefficient
     double constant = 0;
+    double cerr = 0;             // the same three for the constant
+    bool crounded = false, cop_rounded = false;
     double coef(int field) const {
         for (const auto& t : terms)
             if (t.field == field) return t.coef;
@@ -111,12 +117,17 @@ struct Built {
 };
 Built assemble(const Spec& s);                               // throws Fail(E_LIMIT) when too large
 
-// An orthogonal matrix from a seed (d x d, row-major). The kit's recipe (the QR factor of a Gaussian
-// matrix, columns signed so that R's diagonal is positive) on quill's own random stream, computed
-// with +, -, *, / and sqrt only, so a seed gives the same bits everywhere. Not numpy's matrix.
-std::vector<double> rotation(int d, unsigned long long seed);
-// The same function in the rotated basis: state_rotated = Q state_axis.
-Network rotated(const Network& axis, const std::vector<double>& q);
+// An orthogonal matrix from a seed. The kit's recipe (the QR factor of a Gaussian matrix, columns signed
+// so that R's diagonal is positive) on quill's own random stream, computed with +, -, *, / and sqrt only,
+// so a seed gives the same bits everywhere. Not numpy's matrix. Only its first `cols` columns are
+// computed and returned (d x cols, row-major, row stride cols); they are bit for bit those of the whole
+// matrix, which the rest would cost O(d^3) to compute.
+std::vector<double> rotation(int d, unsigned long long seed, int cols);
+// The columns of Q that a rotated build of `axis` needs: every coordinate a weight or the start state
+// touches, and up to four spares after the `fields` named fields (the manifest's true shams).
+size_t rotation_columns(const Network& axis, size_t fields);
+// The same function in the rotated basis: state_rotated = Q state_axis. q holds the first m columns.
+Network rotated(const Network& axis, const std::vector<double>& q, size_t m);
 
 // ---- the model: a network with what is known about it -------------------------------------------
 struct Model {
