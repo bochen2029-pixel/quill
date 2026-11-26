@@ -197,6 +197,8 @@ void test_language(Suite& t) {
         { "net x\ntokens a b\nfields A\ntau A <- 2*in.a - 0.5\nclear in.a\nreadout A\n", "cleared by quill itself", 5, 7, "" },
         { "net x\ntokens a b\nfields A\ntau A 2*A\nreadout A\n", "a tau has the form", 4, 1, "for example" },
         { "net x\ntokens a b\nfields A spare3\nreadout A\n", "is reserved", 3, 10, "" },
+        { "net x\ntokens a b\nlatch in.b toggle=a\nemit in.b\n", "is the input field of a token", 3, 7, "choose another name" },
+        { "net x\ntokens a b\nfields in.zzz\nreadout 4\n", "'zzz' is not a token", 3, 8, "in.<token> is the field" },
         { "tokens a b\nfields A\nreadout A\n", "has no `net NAME` statement", 0, 0, "" },
     };
     std::string bad;
@@ -243,6 +245,27 @@ void test_language(Suite& t) {
             why = f.first().message;
         }
         t.check(ok, "expressions (+ - * / and parentheses), in.TOKEN fields, comments as meanings: the weights are the formulas", why);
+    }
+    {
+        // `fields in.b` declares b's input field where it stands; a field an expression names only with a zero weight
+        // (0*in.a) is still declared there. Printed back in primitive statements, the network is the same, bit for bit.
+        bool ok = false;
+        std::string why;
+        try {
+            const Spec s = parse_spec("net x\ntokens a b\nfields A in.b B\ntau A <- 2*in.b + 0*in.a - 0.5\nclear A B\nreadout 8*A - 4\n");
+            const Built b = assemble(s);
+            const std::string text = expanded_text(s);
+            const Spec s2 = parse_spec(text);
+            const Built b2 = assemble(s2);
+            const size_t d = (size_t)s.width;
+            ok = s.field("A") == 1 && s.field("in.b") == 2 && s.field("B") == 3 && s.field("in.a") == 4 && b.net.E[d + 2] == 1 && b.net.E[4] == 1 &&
+                 b.rules.size() == 5 && b.rules[3].text == "clear in.b" && b.rules[4].text == "clear in.a" && b2.net.W1 == b.net.W1 && b2.net.W2 == b.net.W2 &&
+                 b2.net.E == b.net.E && b2.net.b1 == b.net.b1 && b2.net.Wout == b.net.Wout && expanded_text(s2) == text && contains(text, "\nfields in.b\n") &&
+                 !contains(text, "\nembed ") && !contains(text, "\nclear in.");
+        } catch (const Fail& f) {
+            why = f.first().message;
+        }
+        t.check(ok, "fields in.TOKEN declares that token's input field where it stands; quill embeds and clears it, and the text printed back rebuilds the network", why);
     }
     {
         std::string fields28, fields27;

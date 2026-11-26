@@ -87,6 +87,9 @@ struct Spec {
 Spec parse_spec(const std::string& text);
 std::string lin_text(const Spec& s, const Lin& l);           // "2*in1 - 2*A - 0.5"
 std::string op_text(const Spec& s, const Op& op);            // the operation as a primitive statement
+// The embed and the clear quill writes for an in.<token> field: implied wherever that field is declared
+// (in an expression or by `fields in.TOKEN`), so the text printed back leaves them out.
+bool implied_by_input(const Spec& s, const Op& op);
 std::string expanded_text(const Spec& s);                    // the whole specification, primitives only
 
 // ---- weights --------------------------------------------------------------------------------------

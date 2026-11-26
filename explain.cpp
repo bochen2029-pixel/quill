@@ -455,7 +455,7 @@ JV explain_json(const Model& m) {
         for (size_t g = 0; g < s.sugar.size(); ++g) {
             JV lines = JV::array();
             for (const auto& op : s.ops)
-                if (op.sugar == (int)g) lines.push(op_text(s, op));
+                if (op.sugar == (int)g && !implied_by_input(s, op)) lines.push(op_text(s, op));
             JV x = JV::object();
             x.set("line", s.sugar[g].line).set("statement", s.sugar[g].text).set("expands_to", lines);
             sugar.push(x);
@@ -561,11 +561,12 @@ std::string explain_markdown(const Model& m) {
         s.rotate = m.rotated;                                // as built: a --rotate or --no-rotate override decides, not the text
         s.seed = m.seed;
         if (!s.sugar.empty()) {
-            o += "\n## Expansions\n\nEach shorthand statement, and the primitive statements quill wrote for it.\n";
+            o += "\n## Expansions\n\nEach shorthand statement, and the primitive statements quill wrote for it. A line `fields in.TOKEN` declares "
+                 "that token's input field; quill embeds the token into it and clears it after the last rule.\n";
             for (size_t g = 0; g < s.sugar.size(); ++g) {
                 o += ssprintf("\nline %d:\n\n```\n%s\n```\n\nis shorthand for\n\n```\n", s.sugar[g].line, s.sugar[g].text.c_str());
                 for (const auto& op : s.ops)
-                    if (op.sugar == (int)g) o += op_text(s, op) + (op.note.empty() ? "" : "    # " + op.note) + "\n";
+                    if (op.sugar == (int)g && !implied_by_input(s, op)) o += op_text(s, op) + (op.note.empty() ? "" : "    # " + op.note) + "\n";
                 o += "```\n";
             }
         }

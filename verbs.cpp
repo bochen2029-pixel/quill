@@ -414,7 +414,7 @@ Answer verb_npz(const std::string& path) {
     const std::string file = slurp(path, "the file");
     const std::string label = "the file";
     JV arrays = JV::array();
-    a.text = ssprintf("npz: %zu bytes, sha256 %s\n", file.size(), sha256_hex(file).c_str());
+    a.text = ssprintf("npz: %s bytes, sha256 %s\n", commas(file.size()).c_str(), sha256_hex(file).c_str());
     for (const auto& e : zip_list(file, label)) {
         JV x = JV::object();
         x.set("entry", e.name).set("compression", e.method == 0 ? "stored" : e.method == 8 ? "deflate" : "other");

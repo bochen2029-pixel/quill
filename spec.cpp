@@ -368,6 +368,9 @@ struct Parser {
             fail(k.col, "'" + k.text + "' is not a field name: start with a letter or '_', then letters, digits, '_' and '.'");
         if (k.text == "one") fail(k.col, "`one` is always there (it holds the constant 1); do not declare it");
         if (is_spare(k.text)) fail(k.col, "'" + k.text + "' is reserved: quill names the unused coordinates spare0, spare1, ...");
+        if (k.text.compare(0, 3, "in.") == 0)
+            fail(k.col, "'" + k.text + "' is reserved: a name that starts with 'in.' is the input field of a token (in.<token>)",
+                 "choose another name");
         const auto it = field_at.find(k.text);
         if (it != field_at.end())
             fail(k.col, ssprintf("the field '%s' is already declared at line %d", k.text.c_str(), s.fields[(size_t)it->second].line));
@@ -375,11 +378,29 @@ struct Parser {
     void st_fields() {
         if (t.size() < 2) fail(end_col(), "fields needs at least one field name", "for example: fields A B");
         std::vector<int> made;
+        const auto flush = [&] {
+            if (!made.empty()) push(Op::Fields).fields = made;
+            made.clear();
+        };
         for (size_t i = 1; i < t.size(); ++i) {
-            check_new_field(t[i]);
-            made.push_back(add_field(t[i].text, FieldDecl::Declared, t[i].col));
+            const Tok& k = t[i];
+            if (k.kind != Tok::Punct && k.text.size() > 3 && k.text.compare(0, 3, "in.") == 0) {
+                // A token's input field, declared here so that its coordinate comes here; quill still embeds and clears it.
+                need_tokens(k.col);
+                const int tok = s.token(std::string_view(k.text).substr(3));
+                if (tok < 0)
+                    fail(k.col, "'" + k.text + "' cannot be declared: '" + k.text.substr(3) + "' is not a token. The tokens are: " + names(s.tokens),
+                         "in.<token> is the field that is 1 while that token is being read");
+                if (const auto it = field_at.find(k.text); it != field_at.end())
+                    fail(k.col, ssprintf("the field '%s' is already declared at line %d", k.text.c_str(), s.fields[(size_t)it->second].line));
+                flush();
+                input_field(tok);
+                continue;
+            }
+            check_new_field(k);
+            made.push_back(add_field(k.text, FieldDecl::Declared, k.col));
         }
-        push(Op::Fields).fields = made;
+        flush();
     }
     void st_embed() {
         if (t.size() < 3) fail(end_col(), "embed takes a token and the field it adds 1 to", "for example: embed one in1");
@@ -669,6 +690,9 @@ struct Parser {
             fail(end_col(), "machine takes a name and states=N", "for example: machine S states=3 init=0");
         const Tok name = t[1];
         if (!field_name_ok(name.text)) fail(name.col, "'" + name.text + "' is not a machine name: start with a letter or '_'");
+        if (name.text == "in")
+            fail(name.col, "'in' cannot name a machine: its state fields in.0, in.1, ... would take names reserved for the in.<token> fields",
+                 "choose another name, for example: machine S states=3");
         for (const auto& m : s.machines)
             if (m.name == name.text) fail(name.col, ssprintf("the machine '%s' is already declared at line %d", m.name.c_str(), m.line));
         unsigned long long states = 0, init = 0;
@@ -873,8 +897,11 @@ struct Parser {
                 if (b == std::string::npos) b = strlen(kStatements);
                 words.emplace_back(kStatements + a, b - a);
             }
-            const std::string near = nearest(w, words);
-            fail(k.col, "unknown statement '" + w + "'. The statements are: " + kStatements, near.empty() ? "" : "did you mean '" + near + "'?");
+            std::string lower = w;
+            for (auto& c : lower) c = (char)tolower((unsigned char)c);
+            const std::string near = std::find(words.begin(), words.end(), lower) != words.end() ? lower : nearest(w, words);
+            fail(k.col, "unknown statement '" + w + "'. The statements are: " + kStatements,
+                 near.empty() ? "" : near == lower ? "statements are lowercase: write '" + near + "'" : "did you mean '" + near + "'?");
         }
     }
 
@@ -1042,10 +1069,25 @@ std::string op_text(const Spec& s, const Op& op) {
     return std::string();
 }
 
+bool implied_by_input(const Spec& s, const Op& op) {
+    if (!op.generated || (op.kind != Op::Embed && op.kind != Op::Clear) || op.fields.empty()) return false;
+    for (int f : op.fields)
+        if (!s.fields[(size_t)f].auto_clear) return false;
+    return true;
+}
+
 std::string expanded_text(const Spec& s) {
     std::string out = "# " + s.name + ": the same network in primitive statements only (what quill assembles)\n";
+    std::vector<std::string> inputs;
+    for (const auto& f : s.fields)
+        if (f.auto_clear) inputs.push_back(f.name);
+    if (!inputs.empty())
+        out += "# " + join(inputs, ", ") +
+               (inputs.size() == 1 ? " is the input field of its token: quill embeds the token into it and clears it after the last rule\n"
+                                   : " are the input fields of their tokens: quill embeds each token into its field and clears the field after the last rule\n");
     out += "net " + s.name + "\ntokens " + join(s.tokens, " ") + "\n";
     for (const auto& op : s.ops) {
+        if (implied_by_input(s, op)) continue;
         std::string ln = op_text(s, op);
         if (!op.note.empty()) {
             std::string n = op.note;
