@@ -46,17 +46,27 @@ public:
     int neurons() const { return n_; }
     int padded() const { return dp_; }                        // length of a state buffer (width rounded up to 8)
     int padded_neurons() const { return np_; }                // length of a z buffer
+    bool sparse() const { return sparse_; }                   // which of the two code paths this network takes
     void load(const double* r, double* state) const;          // width values in, a padded state out
     void step(double* state, int token, double* z) const;     // in place; z receives the pre-activations
-    void step(double* state, int token) const { step(state, token, z_.data()); }
+    void step(double* state, int token) const;
     double margin(const double* state) const;                 // emit minus hold
 private:
+    void step_dense(double* r, int token, double* z) const;
+    void step_sparse(double* r, int token, double* z_out) const;
     int d_ = 0, n_ = 0, dp_ = 0, np_ = 0;
-    std::vector<double> E_, W1c_, b1_, W2n_;                  // E by token; W1 by column; W2 by neuron
-    std::vector<double> wm_;
+    bool sparse_ = false, full_ = false;
+    std::vector<double> b1_, wm_;
+    std::vector<int> wm_at_;
     double bm_ = 0;
-    mutable std::vector<double> z_;
-    mutable std::vector<int> act_;
+    // dense: E by token; W1 by column; W2 by neuron
+    std::vector<double> E_, W1c_, W2n_;
+    // sparse: the nonzeros of E by token, of W1 by column, of W2 by neuron; the neurons with a positive bias
+    std::vector<int> e_start_, e_at_, c_start_, c_row_, n_start_, n_row_, always_;
+    std::vector<double> e_val_, c_val_, n_val_;
+    mutable std::vector<double> z_, zs_;
+    mutable std::vector<int> act_, act2_, cols_;
+    mutable std::vector<char> mark_;
 };
 
 }  // namespace quill

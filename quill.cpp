@@ -60,25 +60,9 @@ OPTIONS
             --rotate SEED    build in a rotated basis with this seed, whatever the SPEC says
             --no-rotate      build axis-aligned, whatever the SPEC says
 
-THE SPECIFICATION LANGUAGE (one statement per line; # starts a comment)
-  net NAME                         the network's name
-  tokens zero one two              the input alphabet
-  fields in0 in1 A                 named state coordinates; `one` (the constant 1) always exists
-  embed one in1                    when the token arrives, add 1 to the field
-  init A=1                         start values (default 0)
-  tau A <- 2*in1 - 2*A - 0.5       A += tau(z), tau(z) = relu(z) - relu(z - 1); several targets allowed
-  neuron 2*in1 - 0.5 -> A - B      one raw relu: fields += weights * relu(z)
-  clear A in1                      the field is rewritten from zero at every step
-  readout 8*A - 4                  the margin: emit when it is above 0
-  emit A                           shorthand for readout 8*A - 4
-  latch A set=a reset=b toggle=c   a one-bit register; other tokens hold it
-  machine S states=3 init=0        one-hot fields S.0 S.1 S.2; then lines such as
-    on one: 0->1 1->2 2->0           on zero: *->0        (unlisted pairs hold)
-  rotate 101                       optional: a rotated basis from this seed
-  width 32                         optional: default is fields + 4 spares, rounded up to 8, at least 32
-  in.TOKEN is a ready-made field that is 1 while that token is read; quill declares, embeds, clears it.
-  Every rule reads the state as it was before the step: one rule cannot read what another writes.
+)help";
 
+static const char* const kHelpTail = R"help(
 GRADES   proved     the states close bit for bit: true for every token sequence of any length
          checked    verified to 1e-9 in float64 (a rotated basis rounds), or against given data
          sampled    verified on random token sequences only (seed and count stated)
@@ -86,6 +70,12 @@ GRADES   proved     the states close bit for bit: true for every token sequence 
 
 EXIT CODES   0 ok   1 refuted (a proof or a check failed)   2 error (bad input)   3 undecided
 )help";
+
+static void print_help() {
+    printf(kHelp, kVersion);
+    fputs(language_card(), stdout);
+    fputs(kHelpTail, stdout);
+}
 
 namespace {
 
@@ -215,7 +205,7 @@ int about() {
                      "and threshold rules becomes explicit weights with a line of meaning per neuron, an exhaustive proof that the network "
                      "is exact, and a fast runner");
     o.set("stage", "0.1: the recurrent class (one step per token, no attention)");
-    o.set("verbs", verbs).set("mcp", mcp).set("health", health).set("docs", path_join(exe_dir(), "README.md")).set("tape", JV());
+    o.set("verbs", verbs).set("mcp", mcp).set("health", health).set("docs", exe_dir() + "\\README.md").set("tape", JV());
     const std::string line = json_compact(o) + "\n";
     fwrite(line.data(), 1, line.size(), stdout);
     return ok ? 0 : 2;
@@ -239,14 +229,14 @@ std::string receipt_line(const Answer& a) {
 
 int dispatch(const std::vector<std::string>& argv, bool& json, std::string& verb) {
     if (argv.size() < 2) {
-        printf(kHelp, kVersion);
+        print_help();
         return 0;
     }
     verb = argv[1];
     for (const auto& s : argv)
         if (s == "--json" || s == "-j") json = true;
     if (verb == "--help" || verb == "-h" || verb == "/?" || verb == "help") {
-        printf(kHelp, kVersion);
+        print_help();
         return 0;
     }
     if (verb == "--version" || verb == "-v" || verb == "version") {

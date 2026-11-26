@@ -204,13 +204,17 @@ std::string clean_utf8(std::string_view s) {
     return out;
 }
 
+// Insertions, deletions, substitutions, and swaps of two neighbouring characters, each counted once.
 int edit_distance(std::string_view a, std::string_view b) {
-    std::vector<int> prev(b.size() + 1), cur(b.size() + 1);
+    std::vector<int> before(b.size() + 1), prev(b.size() + 1), cur(b.size() + 1);
     for (size_t j = 0; j <= b.size(); ++j) prev[j] = (int)j;
     for (size_t i = 1; i <= a.size(); ++i) {
         cur[0] = (int)i;
-        for (size_t j = 1; j <= b.size(); ++j)
+        for (size_t j = 1; j <= b.size(); ++j) {
             cur[j] = std::min({ prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1) });
+            if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) cur[j] = std::min(cur[j], before[j - 2] + 1);
+        }
+        std::swap(before, prev);
         std::swap(prev, cur);
     }
     return prev[b.size()];
@@ -223,8 +227,8 @@ std::string nearest(std::string_view want, const std::vector<std::string>& have)
         const int d = edit_distance(want, h);
         if (d < best_d) { best_d = d; best = h; }
     }
-    const int limit = want.size() <= 3 ? 1 : 2;
-    return best_d <= limit ? best : std::string();
+    const int limit = want.size() <= 4 ? 1 : 2;              // a likely typo, not merely a short word
+    return best_d <= limit && best_d < (int)want.size() ? best : std::string();
 }
 
 // ======================================================================

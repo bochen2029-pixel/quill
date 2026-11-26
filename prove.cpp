@@ -614,7 +614,7 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         else if (e.capped) {
             line += ssprintf("; STOPPED at the cap of %s states: every token sequence of up to %d tokens was covered", commas(opt.cap).c_str(), e.exhaustive_depth);
             r.set("exhaustive_to_depth", e.exhaustive_depth);
-        } else line += ssprintf("; %zu of the states are not clean and were not followed further", e.dirty_total);
+        } else line += ssprintf("; %zu of them %s not clean and %s not followed further", e.dirty_total, e.dirty_total == 1 ? "is" : "are", e.dirty_total == 1 ? "was" : "were");
         results.set("reachable", r);
         fold(holds, grade);
         lines.push_back("reachable    " + line + "   [" + grade + "]");
@@ -655,8 +655,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         } else if (ck.taus.empty()) line = "the network has no threshold";
         else {
             const RuleStat& st = e.rule[(size_t)min_rule];
-            line = ssprintf("%s %zu threshold%s outside (0, 1) at every state and token; smallest distance %s (", holds == 1 ? "all" : "so far all",
-                            ck.taus.size(), ck.taus.size() == 1 ? " stays" : "s stay", show(min_dist).c_str()) +
+            line = ssprintf("%s %s threshold%s outside (0, 1) at every state and token; smallest distance %s (", holds == 1 ? "all" : "so far all",
+                            commas(ck.taus.size()).c_str(), ck.taus.size() == 1 ? " stays" : "s stay", show(min_dist).c_str()) +
                    rule_ref(m, min_rule) + " at z = " + show(st.z_at) + ", state " + state_text(m, e.state(st.state)) + ", token " +
                    m.net.tokens[(size_t)st.token] + ")";
             if (min_dist <= kTol)
@@ -819,7 +819,8 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
         dj.set("note", "counted over the states that some token leads to: a decision is made after a token");
         res.set("decisions", dj);
         if (counted)
-            lines.push_back(ssprintf("decisions    emit in %zu state%s, hold in %zu; smallest |margin| %s", emits, emits == 1 ? "" : "s", counted - emits, show(dmin).c_str()));
+            lines.push_back(ssprintf("decisions    emit in %s state%s, hold in %s; smallest |margin| %s", commas(emits).c_str(), emits == 1 ? "" : "s",
+                                     commas(counted - emits).c_str(), show(dmin).c_str()));
     }
     {
         JV rules = JV::array();

@@ -60,6 +60,10 @@ Answer verb_npz(const std::string& path);
 Answer verb_examples(const std::string& name, const std::string& write_dir);
 Answer verb_selftest();
 int run_mcp();
+// One JSON-RPC request line in, one response line out ("" for a notification).
+std::string mcp_handle(const std::string& line);
+// The specification language on one screen: shared by --help and by the MCP tool descriptions.
+const char* language_card();
 
 // The specifications that ship inside the executable (examples.cpp).
 struct Example {

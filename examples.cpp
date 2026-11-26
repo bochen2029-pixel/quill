@@ -113,6 +113,15 @@ clear   s1 s2 s3 in0 in1 in2
 readout 8/3*s1 + 8/3*s2 + 8/3*s3 - 4                           # the three copies vote: +4 or -4 when they agree
 )quill";
 
+const char* const kParityIn = R"quill(net     parity
+tokens  zero one skip
+fields  A
+tau     A <- 2*in.one - 2*A - 0.5               # a one arrives while A is 0: A becomes 1
+tau     A <- 2*A - 2*in.one - 2*in.zero - 0.5   # A is 1 and a skip arrives: A stays 1
+clear   A                                       # A is rewritten from zero at every step
+readout 8*A - 4                                 # emit while the ones since the last zero are odd in number
+)quill";
+
 const char* const kParity = R"quill(# parity_latch: R1's function written with the latch statement. quill declares the fields
 # in.one and in.zero, embeds the tokens into them and clears them; `quill explain` shows it all.
 net     parity_latch
@@ -188,6 +197,7 @@ const std::vector<Example>& examples() {
         { "R3_overcomplete", "R3_overcomplete.spec", "the kit's R3_overcomplete: the count modulo 12, read modulo 3", kR3 },
         { "R4_two_bits", "R4_two_bits.spec", "the kit's R4_two_bits: bit A used by the readout, bit U kept and unused", kR4 },
         { "R5_redundant", "R5_redundant.spec", "the kit's R5_redundant: one bit in three copies, rewritten from their majority", kR5 },
+        { "parity", "parity.spec", "the example of --help: one bit with in.TOKEN fields, seven lines", kParityIn },
         { "parity_latch", "parity_latch.spec", "R1's function in two lines, with the latch statement", kParity },
         { "counter_mod3", "counter_mod3.spec", "a counter modulo 3 with reset, with the machine statement", kMod3 },
         { "fault_ramp", "fault_ramp.spec", "planted fault: a threshold argument lands on its ramp", kFaultRamp },
@@ -197,6 +207,40 @@ const std::vector<Example>& examples() {
         { "mod3.machine", "mod3.machine.json", "a transition table for --equiv: ones modulo 3, reset by zero", kMod3Machine },
     };
     return list;
+}
+
+const char* language_card() {
+    static const std::string card = std::string(
+        "THE SPECIFICATION LANGUAGE (one statement per line; # starts a comment)\n"
+        "  net NAME                         the network's name\n"
+        "  tokens zero one two              the input alphabet\n"
+        "  fields in0 in1 A                 named state coordinates; `one`, the constant 1, always exists\n"
+        "  embed one in1                    when the token arrives, add 1 to the field\n"
+        "  init A=1                         start values (default 0)\n"
+        "  tau A <- 2*in1 - 2*A - 0.5       A += tau(z), where tau(z) = relu(z) - relu(z - 1): 0 for z <= 0, 1 for z >= 1.\n"
+        "                                   Write z to land at 1.5 or above, or at -0.5 or below. Several targets allowed.\n"
+        "  neuron 2*in1 - 0.5 -> A - B      one raw relu: each field on the right += its weight * relu(z)\n"
+        "  clear A in1                      the field is rewritten from zero at every step: every field a tau writes needs it\n"
+        "  readout 8*A - 4                  the margin; the decision is emit when it is above 0\n"
+        "  emit A                           shorthand for readout 8*A - 4\n"
+        "  latch A set=a reset=b toggle=c   a one-bit register; other tokens hold it; init=1 starts it at 1\n"
+        "  machine S states=3 init=0        one-hot fields S.0 S.1 S.2; then lines such as\n"
+        "    on one: 0->1 1->2 2->0           on zero: *->0          (pairs not listed hold)\n"
+        "  rotate 101                       optional: a rotated basis from this seed\n"
+        "  width 32                         optional: default is fields + 4 spares, rounded up to 8, at least 32\n"
+        "  in.TOKEN is a ready-made field that is 1 while that token is read: quill declares, embeds and clears it.\n"
+        "  An expression is a sum of number*field terms and numbers; + - * / and parentheses, linear in the fields.\n"
+        "  Every rule reads the state as it was before the step: one rule cannot read what another writes.\n"
+        "\nEXAMPLE\n") + [] {
+            std::string out;
+            for (const char* p = kParityIn; *p;) {
+                const char* nl = strchr(p, '\n');
+                out += "  " + std::string(p, nl ? (size_t)(nl - p) : strlen(p)) + "\n";
+                p = nl ? nl + 1 : p + strlen(p);
+            }
+            return out;
+        }();
+    return card.c_str();
 }
 
 const Example* example(std::string_view name) {

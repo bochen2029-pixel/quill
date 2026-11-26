@@ -223,10 +223,11 @@ std::string capped(const std::vector<std::string>& v, size_t most) {
     return out;
 }
 
-Lin readout_lin(const Model& m) {
+Lin readout_lin(const Model& m) {                         // the margin over the fields, the constant `one` last
     Lin l;
-    for (int f = 0; f < m.F(); ++f)
-        if (std::fabs(m.ro[(size_t)f]) > kTol) l.terms.push_back({ f, snap9(m.ro[(size_t)f]) });
+    for (int pass = 0; pass < 2; ++pass)
+        for (int f = 0; f < m.F(); ++f)
+            if ((f == m.one) == (pass == 1) && std::fabs(m.ro[(size_t)f]) > kTol) l.terms.push_back({ f, snap9(m.ro[(size_t)f]) });
     return l;
 }
 
@@ -235,6 +236,17 @@ std::string md_cell(std::string s) {                      // keep a table cell o
         if (s[i] == '|') { s.insert(i, "\\"); ++i; }
         else if (s[i] == '\n') s[i] = ' ';
     return s;
+}
+
+std::string one_line(const std::string& s) {              // a statement of several lines, on one
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '\n') { out += s[i]; continue; }
+        out += ";";
+        while (i + 1 < s.size() && s[i + 1] == ' ') ++i;
+        out += ' ';
+    }
+    return out;
 }
 
 const char* kind_name(Rule::Kind k) { return k == Rule::Tau ? "tau" : k == Rule::Clear ? "clear" : "neuron"; }
@@ -495,7 +507,7 @@ std::string explain_markdown(const Model& m) {
         const Rule& r = m.rules[k];
         const Firing& fi = ex.fire[k];
         o += ssprintf("\n### rule %zu%s: `%s`\n\n", k + 1, r.line ? ssprintf(" (line %d)", r.line).c_str() : "", r.text.c_str());
-        if (!r.from.empty()) o += "- from: " + (r.from == "automatic" ? std::string("quill, for an `in.<token>` field") : "`" + md_cell(r.from) + "`") + "\n";
+        if (!r.from.empty()) o += "- from: " + (r.from == "automatic" ? std::string("quill, for an `in.<token>` field") : "`" + one_line(r.from) + "`") + "\n";
         if (!r.note.empty()) o += "- meaning: " + r.note + "\n";
         if (r.kind == Rule::Clear) o += "- acts on every step: the field goes back to 0 before the taus add to it\n";
         else if (fi.known) {

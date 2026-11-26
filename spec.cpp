@@ -560,6 +560,12 @@ struct Parser {
         }
         return out;
     }
+    std::string any_of(const std::vector<int>& toks) const {      // "a", "a or b", "a, b or c"
+        std::string out;
+        for (size_t i = 0; i < toks.size(); ++i)
+            out += (i == 0 ? "" : i + 1 == toks.size() ? " or " : ", ") + s.tokens[(size_t)toks[i]];
+        return out;
+    }
     Lin lin(std::initializer_list<Term> terms, double constant) {
         Lin l;
         l.terms.assign(terms);
@@ -618,11 +624,7 @@ struct Parser {
             op.values = { (double)init };
         }
         const std::string who = "latch " + name.text + ": ";
-        const auto listed = [&](const std::vector<int>& v) {
-            std::string out;
-            for (size_t i = 0; i < v.size(); ++i) out += (i ? ", " : "") + s.tokens[(size_t)v[i]];
-            return out;
-        };
+        const auto listed = [&](const std::vector<int>& v) { return any_of(v); };
         if (!set.empty()) {
             Lin in;
             for (int tok : set) in.terms.push_back({ input_field(tok), 2.0 });
@@ -825,16 +827,12 @@ struct Parser {
             if (leaves.size() == T) continue;                     // it never holds: no rule needed
             Lin in;
             in.terms.push_back({ sf(st), 2.0 });
-            std::string list;
-            for (int e : leaves) {
-                in.terms.push_back({ input_field(e), -2.0 });
-                list += (list.empty() ? "" : ", ") + s.tokens[(size_t)e];
-            }
+            for (int e : leaves) in.terms.push_back({ input_field(e), -2.0 });
             in.constant = -0.5;
             Op& op = push(Op::Tau);
             op.fields = { sf(st) };
             op.in = in;
-            op.note = who + "state " + std::to_string(st) + (leaves.empty() ? " holds on every token" : " holds unless " + list + " arrives");
+            op.note = who + "state " + std::to_string(st) + (leaves.empty() ? " holds on every token" : " holds unless " + any_of(leaves) + " arrives");
         }
         std::vector<int> all;
         for (int st = 0; st < S; ++st) {

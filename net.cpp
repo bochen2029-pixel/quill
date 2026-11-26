@@ -142,9 +142,13 @@ Folder load_folder(const std::string& dir) {
 // ======================================================================
 // the kernel
 // ======================================================================
-// The sums are kept in registers, eight or sixteen values at a time, so that a column costs one
-// multiply and one add per value and nothing waits on memory. SSE2 only: every x64 processor has it,
-// and without a fused multiply-add the bits are the same everywhere.
+// Two code paths compute the same sums in the same order (net.h), and --selftest holds both to the
+// plain definition value for value.
+//   dense   for a rotated basis: the sums are kept in registers, eight or sixteen values at a time, so a
+//           column costs one multiply and one add per value and nothing waits on memory. SSE2 only: every
+//           x64 processor has it, and without a fused multiply-add the bits are the same everywhere.
+//   sparse  when under a quarter of W1 and W2 is set (an axis-aligned network): only the nonzero weights of
+//           the columns whose coordinate is set are visited, and z goes back to b1 after the step.
 namespace {
 inline __m128d ld(const double* p) { return _mm_loadu_pd(p); }
 inline void st(double* p, __m128d v) { _mm_storeu_pd(p, v); }
@@ -155,22 +159,67 @@ Kernel::Kernel(const Network& net) : d_(net.d), n_(net.n) {
     dp_ = (d_ + 7) & ~7;
     np_ = (n_ + 7) & ~7;
     const size_t T = (size_t)net.T(), d = (size_t)d_, n = (size_t)n_, dp = (size_t)dp_, np = (size_t)np_;
-    E_.assign(T * dp, 0.0);
-    for (size_t t = 0; t < T; ++t)
-        for (size_t j = 0; j < d; ++j) E_[t * dp + j] = net.E[t * d + j];
-    W1c_.assign(d * np, 0.0);
-    for (size_t i = 0; i < n; ++i)
-        for (size_t j = 0; j < d; ++j) W1c_[j * np + i] = net.W1[i * d + j];
+    size_t set = 0;
+    for (double v : net.W1) set += v != 0;
+    for (double v : net.W2) set += v != 0;
+    sparse_ = n > 0 && set * 4 < 2 * n * d;                   // under a quarter of W1 and W2 is set: walk the nonzeros only
     b1_.assign(np, 0.0);
     for (size_t i = 0; i < n; ++i) b1_[i] = net.b1[i];
-    W2n_.assign(n * dp, 0.0);
-    for (size_t j = 0; j < d; ++j)
-        for (size_t i = 0; i < n; ++i) W2n_[i * dp + j] = net.W2[j * n + i];
     wm_.assign(dp, 0.0);
-    for (size_t j = 0; j < d; ++j) wm_[j] = net.Wout[d + j] - net.Wout[j];
+    for (size_t j = 0; j < d; ++j) {
+        wm_[j] = net.Wout[d + j] - net.Wout[j];
+        if (wm_[j] != 0) wm_at_.push_back((int)j);
+    }
     bm_ = net.bout[1] - net.bout[0];
     z_.assign(np + 2, 0.0);
     act_.assign(n + 1, 0);
+    cols_.assign(d + 1, 0);
+    if (!sparse_) {
+        size_t start_set = 0;
+        for (double v : net.r0) start_set += v != 0;
+        full_ = start_set * 2 > d;                            // a rotated basis: every coordinate of every state is set
+        E_.assign(T * dp, 0.0);
+        for (size_t t = 0; t < T; ++t)
+            for (size_t j = 0; j < d; ++j) E_[t * dp + j] = net.E[t * d + j];
+        W1c_.assign(d * np, 0.0);
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < d; ++j) W1c_[j * np + i] = net.W1[i * d + j];
+        W2n_.assign(n * dp, 0.0);
+        for (size_t j = 0; j < d; ++j)
+            for (size_t i = 0; i < n; ++i) W2n_[i * dp + j] = net.W2[j * n + i];
+        return;
+    }
+    e_start_.assign(T + 1, 0);
+    for (size_t t = 0; t < T; ++t) {
+        for (size_t j = 0; j < d; ++j)
+            if (net.E[t * d + j] != 0) {
+                e_at_.push_back((int)j);
+                e_val_.push_back(net.E[t * d + j]);
+            }
+        e_start_[t + 1] = (int)e_at_.size();
+    }
+    c_start_.assign(d + 1, 0);                                // W1 by column, neurons in increasing order
+    for (size_t j = 0; j < d; ++j) {
+        for (size_t i = 0; i < n; ++i)
+            if (net.W1[i * d + j] != 0) {
+                c_row_.push_back((int)i);
+                c_val_.push_back(net.W1[i * d + j]);
+            }
+        c_start_[j + 1] = (int)c_row_.size();
+    }
+    n_start_.assign(n + 1, 0);                                // W2 by neuron, coordinates in increasing order
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t k = 0; k < d; ++k)
+            if (net.W2[k * n + i] != 0) {
+                n_row_.push_back((int)k);
+                n_val_.push_back(net.W2[k * n + i]);
+            }
+        n_start_[i + 1] = (int)n_row_.size();
+        if (net.b1[i] > 0) always_.push_back((int)i);         // active even when no column reaches it
+    }
+    zs_.assign(net.b1.begin(), net.b1.end());
+    mark_.assign(n, 0);
+    act2_.assign(n + 1, 0);
 }
 
 void Kernel::load(const double* r, double* state) const {
@@ -179,44 +228,133 @@ void Kernel::load(const double* r, double* state) const {
 }
 
 void Kernel::step(double* r, int token, double* z) const {
+    if (sparse_) step_sparse(r, token, z);
+    else step_dense(r, token, z);
+}
+void Kernel::step(double* r, int token) const {
+    if (sparse_) step_sparse(r, token, nullptr);
+    else step_dense(r, token, z_.data());
+}
+
+// The same sums over the nonzero weights only. Each z[i] still takes its columns in increasing order
+// and each r'[k] its active neurons in increasing order, so every value equals the dense one.
+void Kernel::step_sparse(double* r, int token, double* z_out) const {
+    for (int p = e_start_[(size_t)token]; p < e_start_[(size_t)token + 1]; ++p) r[e_at_[(size_t)p]] += e_val_[(size_t)p];
+    int* cols = cols_.data();
+    int nc = 0;
+    for (int j = 0; j < d_; ++j) {
+        cols[nc] = j;
+        nc += r[j] != 0;
+    }
+    double* zs = zs_.data();                                  // holds b1 between steps
+    char* mark = mark_.data();
+    int* touched = act_.data();
+    int nt = 0;
+    for (int i : always_) {
+        mark[i] = 1;
+        touched[nt++] = i;
+    }
+    const int* cs = c_start_.data();
+    for (int c = 0; c < nc; ++c) {
+        const int j = cols[c];
+        const double x = r[j];
+        for (int p = cs[j]; p < cs[j + 1]; ++p) {
+            const int i = c_row_[(size_t)p];
+            if (!mark[i]) {
+                mark[i] = 1;
+                touched[nt++] = i;
+            }
+            zs[i] += c_val_[(size_t)p] * x;
+        }
+    }
+    if (z_out) memcpy(z_out, zs, (size_t)n_ * sizeof(double));
+    int* active = act2_.data();                               // the neurons with z > 0, to be taken in increasing order
+    int na = 0;
+    for (int k = 0; k < nt; ++k) {
+        active[na] = touched[k];
+        na += zs[touched[k]] > 0;
+    }
+    if (na <= 24) {
+        for (int a = 1; a < na; ++a) {
+            const int v = active[a];
+            int b = a - 1;
+            for (; b >= 0 && active[b] > v; --b) active[b + 1] = active[b];
+            active[b + 1] = v;
+        }
+    } else {
+        std::sort(active, active + na);
+    }
+    const int* ns = n_start_.data();
+    for (int k = 0; k < na; ++k) {
+        const int i = active[k];
+        const double h = zs[i];
+        for (int p = ns[i]; p < ns[i + 1]; ++p) r[n_row_[(size_t)p]] += n_val_[(size_t)p] * h;
+    }
+    for (int k = 0; k < nt; ++k) {                            // back to b1 for the next step
+        const int i = touched[k];
+        zs[i] = b1_[(size_t)i];
+        mark[i] = 0;
+    }
+}
+
+void Kernel::step_dense(double* r, int token, double* z) const {
     // x = r + E[token]
     const double* e = E_.data() + (size_t)token * (size_t)dp_;
     for (int j = 0; j < dp_; j += 2) st(r + j, _mm_add_pd(ld(r + j), ld(e + j)));
     // z = b1 + W1 x: for each neuron, the columns in increasing order (a zero x adds nothing)
+    int* cols = cols_.data();
+    int nc = d_;
+    if (!full_) {                                             // few coordinates are set: find them first
+        nc = 0;
+        for (int j = 0; j < d_; ++j) {
+            cols[nc] = j;
+            nc += r[j] != 0;
+        }
+    }
     const double* b1 = b1_.data();
     int b = 0;
     for (; b + 16 <= np_; b += 16) {
         __m128d a0 = ld(b1 + b), a1 = ld(b1 + b + 2), a2 = ld(b1 + b + 4), a3 = ld(b1 + b + 6);
         __m128d a4 = ld(b1 + b + 8), a5 = ld(b1 + b + 10), a6 = ld(b1 + b + 12), a7 = ld(b1 + b + 14);
-        const double* w = W1c_.data() + b;
-        for (int j = 0; j < d_; ++j, w += np_) {
-            const double x = r[j];
-            if (x == 0) continue;
-            const __m128d vx = _mm_set1_pd(x);
-            a0 = mla(a0, vx, w);
-            a1 = mla(a1, vx, w + 2);
-            a2 = mla(a2, vx, w + 4);
-            a3 = mla(a3, vx, w + 6);
-            a4 = mla(a4, vx, w + 8);
-            a5 = mla(a5, vx, w + 10);
-            a6 = mla(a6, vx, w + 12);
-            a7 = mla(a7, vx, w + 14);
+#define QUILL_COLUMN16(W, X)                                    \
+    {                                                           \
+        const __m128d vx = _mm_set1_pd(X);                      \
+        a0 = mla(a0, vx, (W));                                  \
+        a1 = mla(a1, vx, (W) + 2);                              \
+        a2 = mla(a2, vx, (W) + 4);                              \
+        a3 = mla(a3, vx, (W) + 6);                              \
+        a4 = mla(a4, vx, (W) + 8);                              \
+        a5 = mla(a5, vx, (W) + 10);                             \
+        a6 = mla(a6, vx, (W) + 12);                             \
+        a7 = mla(a7, vx, (W) + 14);                             \
+    }
+        if (nc == d_) {                                       // every coordinate is set (a rotated basis): walk straight through
+            const double* w = W1c_.data() + b;
+            for (int j = 0; j < d_; ++j, w += np_) QUILL_COLUMN16(w, r[j])
+        } else {
+            for (int c = 0; c < nc; ++c) QUILL_COLUMN16(W1c_.data() + (size_t)cols[c] * (size_t)np_ + b, r[cols[c]])
         }
+#undef QUILL_COLUMN16
         st(z + b, a0); st(z + b + 2, a1); st(z + b + 4, a2); st(z + b + 6, a3);
         st(z + b + 8, a4); st(z + b + 10, a5); st(z + b + 12, a6); st(z + b + 14, a7);
     }
     if (b < np_) {                                            // np_ is a multiple of 8: one block of 8 is left
         __m128d a0 = ld(b1 + b), a1 = ld(b1 + b + 2), a2 = ld(b1 + b + 4), a3 = ld(b1 + b + 6);
-        const double* w = W1c_.data() + b;
-        for (int j = 0; j < d_; ++j, w += np_) {
-            const double x = r[j];
-            if (x == 0) continue;
-            const __m128d vx = _mm_set1_pd(x);
-            a0 = mla(a0, vx, w);
-            a1 = mla(a1, vx, w + 2);
-            a2 = mla(a2, vx, w + 4);
-            a3 = mla(a3, vx, w + 6);
+#define QUILL_COLUMN8(W, X)                                     \
+    {                                                           \
+        const __m128d vx = _mm_set1_pd(X);                      \
+        a0 = mla(a0, vx, (W));                                  \
+        a1 = mla(a1, vx, (W) + 2);                              \
+        a2 = mla(a2, vx, (W) + 4);                              \
+        a3 = mla(a3, vx, (W) + 6);                              \
+    }
+        if (nc == d_) {
+            const double* w = W1c_.data() + b;
+            for (int j = 0; j < d_; ++j, w += np_) QUILL_COLUMN8(w, r[j])
+        } else {
+            for (int c = 0; c < nc; ++c) QUILL_COLUMN8(W1c_.data() + (size_t)cols[c] * (size_t)np_ + b, r[cols[c]])
         }
+#undef QUILL_COLUMN8
         st(z + b, a0); st(z + b + 2, a1); st(z + b + 4, a2); st(z + b + 6, a3);
     }
     // r' = x + W2 max(z, 0): for each coordinate, the active neurons in increasing order
@@ -246,6 +384,11 @@ void Kernel::step(double* r, int token, double* z) const {
 // Four interleaved partial sums s0..s3 (coordinate j goes to s[j mod 4], in increasing j), then
 // ((s0 + s1) + (s2 + s3)) + bias.
 double Kernel::margin(const double* r) const {
+    if (wm_at_.size() * 4 <= (size_t)dp_) {                   // few readout weights: take them one by one, same sums
+        double s[4] = { 0, 0, 0, 0 };
+        for (int j : wm_at_) s[j & 3] += wm_[(size_t)j] * r[j];
+        return ((s[0] + s[1]) + (s[2] + s[3])) + bm_;
+    }
     const double* w = wm_.data();
     __m128d a01 = _mm_setzero_pd(), a23 = _mm_setzero_pd();
     for (int j = 0; j < dp_; j += 4) {

@@ -363,6 +363,7 @@ Answer verb_run(const Source& src, const RunOptions& o) {
     options.set("start", o.have_start ? JV(sha256_hex(o.start_bytes)) : JV()).set("start_row", o.have_start ? JV(o.start_row) : JV()).set("show", o.show);
     a.input.set("verb", "run").set("input", m.input).set("options", options);
     a.meta.set("seconds", seconds).set("steps_per_second", seconds > 0 ? JV(std::floor((double)steps / seconds)) : JV());
+    a.meta.set("kernel", K.sparse() ? "sparse" : "dense");
     if (dumping) a.meta.set("dump", o.dump_path);
     if (!o.margins_path.empty()) a.meta.set("margins", o.margins_path);
     a.text = ssprintf("run %s: %s step%s, %s emit, %s hold", net.name.c_str(), commas(steps).c_str(), steps == 1 ? "" : "s", commas(emits).c_str(), commas(steps - emits).c_str());
@@ -373,7 +374,8 @@ Answer verb_run(const Source& src, const RunOptions& o) {
         if (steps > rows.arr.size()) a.text += ssprintf("  ... %s more steps not listed (--show N lists more)\n", commas(steps - rows.arr.size()).c_str());
     }
     if (m.F()) a.text += "  final state " + state_text(m, state.data()) + "\n";
-    a.text += seconds > 0 ? ssprintf("  %s steps per second (%s steps in %.6f s, one thread)\n", commas((unsigned long long)((double)steps / seconds)).c_str(), commas(steps).c_str(), seconds)
+    a.text += seconds > 0 ? ssprintf("  %s steps per second (%s steps in %.6f s, one thread, %s kernel)\n", commas((unsigned long long)((double)steps / seconds)).c_str(),
+                                     commas(steps).c_str(), seconds, K.sparse() ? "sparse" : "dense")
                           : std::string("  too few steps to time\n");
     if (dumping) a.text += "  states written to " + o.dump_path + ssprintf(" (float32, %zu values per step)\n", d);
     if (!o.margins_path.empty()) a.text += "  margins written to " + o.margins_path + " (float64, one per step)\n";
