@@ -309,3 +309,158 @@ Each item is a place where an answer, an error or the README said something not 
 4. The planned list in the README: attention heads and sequence networks (the kit's S articles), the
    post's multi-field format and looped transformers, a stencil backend, bit-plane backends, planting
    options beyond `rotate`, an AVX path for the dense kernel.
+
+## 2026-11-26, session 3: quill 0.1.1, a wrong `ok` from `prove`
+
+An independent adversarial review of `quill prove` (0.1.0, from a fresh clone of the release tag)
+found one defect, and it produces wrong `ok` verdicts. This session fixed it and released 0.1.1. Every
+file change was made with the Write and Edit tools; Python ran only as a throwaway comparison script
+outside the repository.
+
+### 19. The defect
+- `prove` treated two states as the same when every coordinate agreed to 1e-9, and a threshold
+  argument inside (0, 1) by less than 1e-9 as outside. Together these let a deterministic fault that
+  doubles at every step pass. The review's realistic case is `specs/fault_edge_drift.spec`: a set/reset
+  latch whose hold rule has the bias 1 + 2^-40 where 0.5 would give it room. After `a`, A = 1; on `c`
+  the hold has z = 1 - 2^-40 and writes A = 1 - 2^-40, which 0.1.0 merged into the state A = 1. The
+  excess doubles at every `c` (1 - 3*2^-40, 1 - 7*2^-40, ...), the bit is lost at the 40th `c`, and
+  0.1.0 said `ok, grade checked`, closed to 9.1e-13, and with `--equiv` the same decisions as the ideal
+  latch. Three variants did the same: a decimal offset of 1e-12 (`fault_edge_decimal`), a field
+  creeping up from 0 (`fault_creep_up`) and one creeping down from 1 (`fault_creep_down`).
+- The words misled as well. The grade line said "rounding keeps it short of a proof" when nothing
+  rounded (2^-40 is a power of two; every step was exact by the inexact flag). The report printed
+  "smallest distance 0" and "z = 1" (or "z = 0"), the values snapped to the 1e-9 grid, and `W_EDGE`
+  said the threshold "lands exactly on an edge" while it was 2^-40 inside.
+- Two more cases of the same family, found while fixing it:
+  1. **A rotated build.** The latch whose rules land exactly on 1 (`tau A <- 2*in.a - 1`,
+     `tau A <- 2*A - 2*in.a - 2*in.b - 1`) is exact in the logic and proves, with `W_EDGE`. Rotated
+     (`--rotate 7`), 0.1.0 said `ok, grade checked (... its rotated float64 build is checked to 1e-9)`.
+     But rounding puts its z a few 1e-16 off the edge, the hold doubles that at every step, and
+     `quill run` shows the bit lost after 49 to 53 holds on five seeds (1, 2, 3, 7, 101).
+  2. **explain** said of the drifting hold "fires (z >= 1): on c when A=1 [z = 1]": z was 1 - 2^-40.
+
+### 20. The fix, and why this one
+The review proposed three things; all three are in, with the refinements below, each for a stated
+reason.
+
+1. **Exact arithmetic: no tolerance at all** (as proposed). States are compared bit for bit, a z strictly
+   inside (0, 1) by any amount is on its ramp, and a named field must be exactly 0 or 1; thresholds
+   exactly on an edge still prove. How the regime is decided: an axis-aligned network is enumerated
+   first in this strict regime, and at the first step whose inexact flag is set the enumeration starts
+   over in the rounded regime. Weighed against switching rules in the middle of an enumeration:
+   starting over keeps one rule for every state of an answer, so `arithmetic` names the rule the whole
+   answer was made under, at a cost of at most one partial pass (rounding networks round within their
+   first few steps). A rotated network goes to the rounded regime at once: its field values are read
+   along directions with rounding, so "exactly 0 or 1" cannot be tested on them.
+2. **Rounded arithmetic: merge only below the network's own noise margin** (as proposed), refined:
+   - The margin is the *representative state's own* (on every token: each threshold's distance from
+     (0, 1) over the sum of its absolute weights, the readout margin over its weights), computed when
+     the state is added (one extra step per token). The global `linf` the review named exists only after
+     the enumeration, when the merges are already made; a state's own margin is never smaller.
+   - A state may absorb near successors only when its margin is **at least 2e-9**, twice the tolerance,
+     and then any successor within 1e-9 may merge with it. My first version compared twice the gap
+     with the margin. On review that proves nothing where the margin is itself rounding-sized (a
+     threshold 1e-15 from an edge): there, the fresh rounding of the next step is as large as the gap
+     being checked. With the floor, every accepted gap plus a step's own rounding (about 1e-15)
+     provably moves no threshold. It changed none of the answers compared below.
+   - The decision counts: the readout margin must keep its sign under the gap, or the merged state would
+     take another state's decision.
+   - **Lone neurons**: an active one passes a gap on linearly (`neuron 2*A - 1 -> A` doubles it), so a
+     state where one is active on some token is never a merge target. Conservative, and only a network
+     that uses `neuron` and rounds is affected; none of the examples, kit articles or tests does.
+   - **"and the clears erase it"**: in an axis-aligned network the two states must also be equal, bit for
+     bit, in every coordinate that no clear rewrites. In a rotated basis this cannot be tested
+     coordinate by coordinate, which is the documented reason `checked` is not `proved` there.
+   - A successor that may not merge is kept as a state of its own (`kept_apart` counts those within 1e-9
+     of another), so a drift is followed step by step until it shows, or until the cap. States with no
+     room are not in the index that merges search, and a lookup examines at most 64 near states:
+     without this the rotated edge latch spent over four minutes in a quadratic scan of a cluster of
+     near states; with it, it reaches the cap in about 4 s.
+3. **"Refute once a z is inside (0, 1) by more than the rounding can explain"** (as proposed), with a
+   bound per evaluation: in an axis-aligned network with field names, gamma(n + 2) times the sum of the
+   absolute terms of z when the step rounded (the token's add, then one product and one add per term),
+   plus each named field's distance from its integer times its weight (the state's own deviation from
+   clean values). A z inside by more is inside at the clean state too: on the ramp by design. A rotated
+   network or one without names keeps 1e-9. The bound is never more than 1e-9, so this regime is never
+   laxer than 0.1.0 was. Fields keep the 1e-9 tolerance in this regime: a rigorous per-field bound needs
+   a running error analysis of the whole step, and the merge rule already keeps any drift visible
+   until it passes 1e-9.
+4. **A rotated build that does not close is `undecided`.** In the layered proof, a float64 fault of the
+   build refutes (it is now looked for before the state count); a build that does not close as the
+   logic does, because near states were kept apart, is undecided, never `ok` and not refuted: nothing
+   was shown to be wrong, only that the build cannot be shown to follow the logic. That is the rotated
+   edge latch's answer now.
+5. **The words** (as proposed): numbers that decide a verdict are printed in full wherever the 1e-9 grid
+   would hide them (`val_text`): z = 0.9999999999990905, distance 9.094947017729282e-13. `W_EDGE`
+   distinguishes exactly on an edge, a given distance outside, and (rounded regime) inside by no more
+   than rounding explains, with both numbers. "Rounding" is said only when something rounded: the
+   exact regime merges bit for bit only, so the grade line's "rounding keeps it short of a proof"
+   can no longer follow exact arithmetic, and `W_MARGIN_ZERO` says "rests on rounding" only when the
+   readout rounds. In the exact regime unclean values and field values are reported as they are
+   (`state_json(..., exact)`), not snapped. New result keys: `reachable.kept_apart`,
+   `exactness.inside_by_rounding`, `violations[].rounding_bound`, `rotated.kept_apart`,
+   `rotated.complete`.
+6. **explain** classifies exactly in an axis-aligned network (its field-coordinate weights are the
+   stored ones), and keeps 1e-9 in a rotated one: the drifting hold is now "never, while the fields are
+   0 or 1" with a possible ramp "on c when A=1".
+7. **The four cases are examples** (`specs/`, 13 files to 17) and self-test checks, with the planted
+   faults; `--help`'s grades and the MCP tool's description say the new rule.
+
+### 21. What shows that it works
+- The review's own script, run against the new build: the four defects are refuted at the first step
+  where the drift shows, naming the state, the token and the rule (the latches after `a`, on `c`; the
+  creeps at the start state), with z in full. The part of its log for the seven correct cases is byte
+  for byte the one it recorded for 0.1.0.
+- Forty-six answers compared with 0.1.0's, field by field (the review's 13 specifications and three of
+  them rotated, the 11 example specifications axis-aligned and rotated with seed 101, the nine kit
+  articles through `prove DIR`): 40 are identical in every reported field (text, results, rules, field
+  values, decisions, state tables, warnings) apart from the new keys. The 6 that changed are the four
+  defects, the dyadic latch rotated (refuted by its logic), and the exact edge latch rotated (`ok` to
+  `undecided`, see 19).
+- The rounded regime, tried on purpose: the drifting latch beside a 2.2 weight (so every step rounds)
+  is refuted at its first step, inside (0, 1) by 9.1e-13 where the rounding bound is 0 there; the
+  drifting latch rotated, in a folder without manifest (no names, so the 1e-9 tolerance applies), is
+  refuted where its drift passes 1e-9, after `a` and ten `c`. 0.1.0 said `ok` to both.
+- `--selftest`: 61 checks, all pass (52 before; the nine new ones are the four defects, `--equiv` and
+  explain on the drifting latch, the rounded and the rotated drift, a threshold 2^-40 outside (0, 1)
+  that proves with its distance in full, and the rotated edge latch undecided). Clean build at
+  `/W4 /WX`. `tests/acceptance.sh`: 24 of 24 as expected.
+- Speed of `prove` is unchanged within noise: 18 toggle latches to the cap 2.8 s (3.3 s with 0.1.0),
+  10 latches rotated 0.04 s (0.05 s).
+
+### 22. What is not done, or not verified
+- The rounded regime is still not a proof for all time: rounding can accumulate along directions that
+  nothing rewrites, the reason `checked` exists. A proof with error bounds for rotated networks stays
+  the next step (18.2), and would turn the rotated edge latch's `undecided` into a refutation with a
+  witness.
+- Fields keep the 1e-9 tolerance when the arithmetic rounds (20.3).
+- A network that rounds and has an active lone neuron cannot close by merging; it closes bit for bit or
+  stays undecided. Not seen in any example, kit article or test.
+- `noise` is still computed from the smallest distance over all states, as before; `run`'s
+  `final_state` is still shown to 1e-9; `check-kit` is unchanged (it compares with given data).
+- As in 17, every run was on this one machine.
+- Commit trailers in this session: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+### 23. Finished by the reviewer
+
+The builder stopped after its build at 12:09, with the fix complete but uncommitted. At 12:45 the
+commissioning session stopped it and handed the working tree to the session that wrote the review,
+which from then on was its only writer. That session:
+
+- **Read the uncommitted diff before relying on it.** The two regimes in `prove.cpp` (exact first, at
+  the first rounded step over again rounded), the rounding bound `Checker::slack`, merges only where
+  the state's room is at least 2e-9 and the gap lies in fields a clear rewrites, `kept_apart`,
+  `inside_by_rounding`, and the wording in the report, `--help` and the MCP description. All of it
+  matches the review's proposal, and every part errs towards keeping states apart.
+- **Added to the README:** no tool that is not public is named; the paper is linked; the build is
+  shown as `.\build.bat`. Added `CHANGELOG.md`.
+- **Checked:**
+  - the build at `/W4 /WX`, clean;
+  - `--selftest`, 61 of 61;
+  - `tests/acceptance.sh`, as documented;
+  - the review's `run_review.sh`: the four defect cases are refuted with grade proved, and the seven
+    others are unchanged;
+  - the review's `readme_check.py`: every runnable example prints what the README shows;
+  - every shipped specification gives the same verdict, states and transitions as 0.1.0, apart from
+    the four new planted faults, which went from `ok` to refuted;
+  - the cleanse gate and scan, clean.

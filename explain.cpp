@@ -13,21 +13,21 @@ double snap9(double v) {
     return s == 0 ? 0.0 : s;
 }
 
-std::string state_text(const Model& m, const double* state) {
+std::string state_text(const Model& m, const double* state, bool exact) {
     if (m.F() == 0) return "{raw coordinates}";
     std::string out;
     for (int f = 0; f < m.F(); ++f) {
-        const double v = snap9(m.value(state, f));
+        const double raw = m.value(state, f), v = exact ? raw : snap9(raw);
         if (f == m.one ? v == 1 : v == 0) continue;
         out += (out.empty() ? "" : ", ") + m.fields[(size_t)f] + "=" + num(v);
     }
     return out.empty() ? "{all fields 0}" : "{" + out + "}";
 }
 
-JV state_json(const Model& m, const double* state) {
+JV state_json(const Model& m, const double* state, bool exact) {
     JV o = JV::object();
     for (int f = 0; f < m.F(); ++f) {
-        const double v = snap9(m.value(state, f));
+        const double raw = m.value(state, f), v = exact ? (raw == 0 ? 0.0 : raw) : snap9(raw);
         if (f == m.one && v == 1) continue;
         o.set(m.fields[(size_t)f], v);
     }
@@ -168,6 +168,9 @@ Firing firing_with(const Model& m, const Statics& st, int rule) {
         }
         return text;
     };
+    // Axis-aligned, the weights in field coordinates are the stored weights themselves: a z of 1 - 2^-40 is on the ramp,
+    // not firing. In a rotated basis they were read off with rounding, and 1e-9 is allowed.
+    const double tol = m.rotated ? kTol : 0.0;
     for (size_t t = 0; t < T; ++t) {
         double base = m.net.b1[i];
         for (size_t f = 0; f < F; ++f) {
@@ -179,8 +182,8 @@ Firing firing_with(const Model& m, const Statics& st, int rule) {
             double z = base;
             for (int b = 0; b < k; ++b)
                 if (a & (1u << b)) z += m.rd[i * F + (size_t)free[(size_t)b]];
-            if (tau ? z >= 1.0 - kTol : z > kTol) { fire.push_back(a); zs.insert(snap9(z)); }
-            else if (tau && z > kTol) ramp.push_back(a);
+            if (tau ? z >= 1.0 - tol : z > tol) { fire.push_back(a); zs.insert(snap9(z)); }
+            else if (tau && z > tol) ramp.push_back(a);
         }
         fire_desc[t] = describe(fire);
         ramp_desc[t] = describe(ramp);

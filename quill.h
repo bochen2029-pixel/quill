@@ -13,10 +13,11 @@
 
 namespace quill {
 
-constexpr const char* kVersion = "0.1.0";
+constexpr const char* kVersion = "0.1.1";
 
-// The one tolerance of the tool: two states are the same, a field is clean, and a threshold argument
-// is on an edge, when the numbers agree to this (BRIEF section 5).
+// The one tolerance of the tool (BRIEF section 5), for arithmetic that rounds: two states may be merged,
+// a field is clean, and a threshold argument may be on an edge, only when the numbers agree to this.
+// prove uses no tolerance at all when its arithmetic is exact, and narrower ones where it can (prove.cpp).
 constexpr double kTol = 1e-9;
 
 std::string ssprintf(const char* f, ...);

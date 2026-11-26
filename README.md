@@ -10,15 +10,19 @@ Nothing is trained.
 
 It exists because a model writing weights by hand is good at choosing the algorithm and the
 meaning of each number, and bad at long exact arithmetic, bookkeeping, and seeing its own
-mistakes. quill does the exact part and returns a graded result, as the math tool Abacus does
-for arithmetic. The recipe is that of "Looped Weight-Space Programming" (MBZUAI, 2026); the
+mistakes. quill does the exact part and returns a graded result, as a certified-arithmetic tool
+does for numbers. The recipe is that of
+[Looped Weight-Space Programming](https://mbzuai-oryx.github.io/LoopedWSP/) (MBZUAI, 2026); the
 reference implementation is the Python planted kit, a prototype that is not part of this
 repository. quill reads and writes the kit's network folders (section 6), and needs nothing from
 the kit to build, to pass its self-test or to run; only `check-kit` reads the kit's article
 folders, each a network with a recorded run (section 4.5).
 
-Version 0.1.0 covers the **recurrent class**: one step per token, no attention.
-C++20, operating-system APIs only, no third-party code, about 1.2 MB.
+Version 0.1.1 covers the **recurrent class**: one step per token, no attention.
+C++20, operating-system APIs only, no third-party code, about 1.2 MB. It corrects a defect of
+0.1.0, whose `prove` could pass as `ok` a network that leaves its clean values by less than 1e-9,
+doubles that at every step and loses its bit after a few dozen steps (section 4.2, "How states,
+fields and thresholds are compared").
 
 This file is the contract: what every verb promises, exactly. Every example output below was
 printed by this version; only timings can differ from one run to the next.
@@ -41,7 +45,7 @@ prove parity: ok, grade proved
   noise        an error of up to 0.083333333 on every coordinate of the state cannot move a threshold into (0, 1); 0.144337567 in Euclidean norm; 0.25 on one coordinate alone (coordinates are fields)   [proved]
   sizes        width 32, 10 neurons, 844 weights (37 not zero), 37 operations per step (682 dense)   [proved]
   decisions    emit in 1 state, hold in 1; smallest |margin| 4
-  receipt      quill1:a1ce9378f749  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 3541599020604214ded394a561dc943f9d1dba78916acb13d47b8a8bf35ce585
+  receipt      quill1:555bc34ea3d4  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 41657ddd6140d967a5588de77ab80352e471b0091e05944f6d95431271528a1f
 
 $ quill run specs/parity.spec --tokens "one one skip one zero"
 run parity: 5 steps, 2 emit, 3 hold, margins from -4 to 4
@@ -81,13 +85,18 @@ prove fault_two_setters: REFUTED, grade proved
 ## 1. Build
 
 ```
-build.bat        VS2022: cl /std:c++20 /O2 /W4 /WX /permissive- /utf-8 /MT /fp:strict  ->  quill.exe
+.\build.bat      VS2022: cl /std:c++20 /O2 /W4 /WX /permissive- /utf-8 /MT /fp:strict  ->  quill.exe
 ```
 
 - Needs Visual Studio 2022 with the x64 C++ tools. Nothing else: no package, no download, no Python.
+- Run it from the repository root as `.\build.bat`, which works in cmd and in PowerShell alike
+  (PowerShell does not run a script from the current folder by its bare name).
 - A clean build prints the twelve file names and `OK: quill.exe`. Any warning stops the build (`/WX`).
 - `/fp:strict` is deliberate: nothing is fused or reordered, and `prove` reads the processor's inexact flag.
-- `quill --selftest` then checks the executable from the inside (52 checks, about half a second, no file written).
+- `quill --selftest` then checks the executable from the inside (61 checks, about a second, no file written).
+  The last check compares a `specs/` folder beside the executable with the examples inside it; an
+  executable with no `specs/` beside it (the release's `quill.exe` on its own) skips that check, says
+  so, and runs 60.
 
 ## 2. The network
 
@@ -151,7 +160,8 @@ width   32                            # optional
 
 Use weights that are exact in binary (2, 0.5, 2.5, 4, ...). Then no sum rounds and `prove` can
 grade the network `proved`. With weights such as 2.2 and 0.7 the same network works, but its
-sums round and the grade is `checked`.
+sums round and the grade is `checked`. With exact sums `prove` tolerates nothing: a threshold
+argument that lands 2^-40 inside (0, 1) is on its ramp, and is refuted as such (4.2).
 
 ### 3.2 Statements
 
@@ -282,8 +292,8 @@ Warnings do not stop a build and are listed in every answer:
 |---|---|
 | `W_NOT_CLEARED` | a tau or a token writes a field that is never cleared, so it grows |
 | `W_UNUSED_FIELD` | a declared field that nothing reads or writes and that starts at 0 |
-| `W_EDGE` | (prove) a threshold lands exactly on 0 or 1: exact, with no room for error |
-| `W_MARGIN_ZERO` | (prove) a reachable state has margin 0, so its decision rests on rounding |
+| `W_EDGE` | (prove) the threshold argument closest to (0, 1) has no room, or almost none: it lands exactly on 0 or 1; or within 1e-9 outside (0, 1), and the message says how far; or, when the arithmetic rounds, inside (0, 1) by no more than rounding explains there, and the message gives both numbers |
+| `W_MARGIN_ZERO` | (prove) a reachable state's margin is 0, or within 1e-9 of it: its decision has no room, and rests on rounding when the readout rounds; the message gives the margin in full |
 | `W_OUTSIDE` | (prove) reachable states hold something outside the named fields |
 | `W_SPEC_MISMATCH`, `W_DIRECTIONS` | (folders) the manifest does not match the weights, or its directions are not orthonormal |
 
@@ -317,16 +327,40 @@ Assembles the network. With `-o DIR` it writes four files and reads each back to
 Enumerates every reachable state breadth-first from the start state under every token, and reports
 six results. Each carries a **grade** (section 5.2).
 
-**How states are told apart.** Two states are the same when they are equal coordinate by
-coordinate (0 and -0 are equal); failing that, when every coordinate agrees to 1e-9. The answer
-says which it took: `closure_residual` is the largest gap that was accepted, 0 when every match
-was exact.
+**How states, fields and thresholds are compared.** It depends on the arithmetic, which `prove`
+reads off the processor's inexact flag around every step (`arithmetic`).
+
+- **Exact** (no operation of any state update rounded, in an axis-aligned network): the float64
+  values are the real-number values of the stored weights, so nothing is tolerated. Two states are
+  the same only bit for bit (0 and -0 are equal), a threshold argument strictly inside (0, 1) by any
+  amount is on its ramp, and every named field must be exactly 0 or 1. Thresholds that land exactly
+  on 0 or 1 still prove (with `W_EDGE`).
+- **Rounded** (some step rounded, or a rotated network): a successor that is not bit for bit an
+  enumerated state is merged with one within 1e-9 in every coordinate only where the merge
+  provably changes nothing. That state's own noise margin must be at least 2e-9: on every token, an
+  error of 2e-9 on every coordinate moves no threshold argument across an edge and no readout
+  margin across 0, and no lone neuron is active. In an axis-aligned network the two must also differ
+  only in fields that a clear rewrites. Both then give every threshold the same value, and the
+  clears erase the gap. Any other successor is kept as a state of its own (`kept_apart` counts
+  those within 1e-9 of another), so a drift is followed step by step until it shows as a fault, or
+  until the cap stops the enumeration. A threshold argument inside (0, 1) is on its ramp unless
+  rounding explains it. In an axis-aligned network with field names that is a bound on the rounding
+  of that very step (when the step rounded) plus what the state's own deviation from clean values
+  does to z; in a rotated network, or one without names, it is 1e-9. A named field must be within
+  1e-9 of 0 or 1.
+
+`closure_residual` is the largest gap that was merged, 0 when every match was bit for bit. quill
+0.1.0 used the 1e-9 tolerance in exact arithmetic too: it merged a state 2^-40 away from another
+and took a z of 1 - 2^-40 to be on the edge, so `specs/fault_edge_drift.spec`, a latch that loses
+its bit after 40 steps, proved `ok`. It is now refuted at the first step where the drift shows.
+`specs/` holds the four cases that an independent review found: `fault_edge_drift`,
+`fault_edge_decimal`, `fault_creep_up` and `fault_creep_down`.
 
 | result | what it says |
 |---|---|
-| `reachable` | `states`, `transitions` (state-token pairs evaluated), `depth` (the longest shortest path), `complete`, `closure_residual`; at the cap also `exhaustive_to_depth` |
-| `exactness` | for every expanded state, token and threshold, the argument z. The distance of z from the open interval (0, 1) is `max(-z, z - 1)`: positive outside, negative inside. `min_distance` is the smallest, and `at` gives the rule, state, token and path where it occurs. The claim fails when some z is inside by more than 1e-9: `violation_count` counts the cases and `violations` describes the first 8 |
-| `cleanliness` | every named field is 0 or 1 to within 1e-9 in every reachable state, and `one` is 1 (`max_offset` is the largest deviation accepted, `outside_named_fields` what the states hold beyond the named fields). Or `violations` describes up to 8 unclean states, each with its first unclean field, the state and token before it, what was kept of the field's old value and what each rule added (`written_by`) |
+| `reachable` | `states`, `transitions` (state-token pairs evaluated), `depth` (the longest shortest path), `complete`, `closure_residual`, `kept_apart`; at the cap also `exhaustive_to_depth` |
+| `exactness` | for every expanded state, token and threshold, the argument z. The distance of z from the open interval (0, 1) is `max(-z, z - 1)`: positive outside, negative inside. `min_distance` is the smallest, as it is (not rounded), and `at` gives the rule, state, token and path where it occurs. The claim fails when some z is on its ramp (see above): `violation_count` counts the cases and `violations` describes the first 8, each with `rounding_bound`, how far inside rounding could have put that z (0 when nothing rounded). `inside_by_rounding` is null, or the deepest z inside (0, 1) that rounding explains: `by` how much, and the `bound` there |
+| `cleanliness` | every named field is 0 or 1 in every reachable state (exactly when the arithmetic is exact, to within 1e-9 when it rounds), and `one` is 1 (`max_offset` is the largest deviation accepted, `outside_named_fields` what the states hold beyond the named fields). Or `violations` describes up to 8 unclean states, each with its first unclean field (`value`: in full when the arithmetic is exact), the state and token before it, what was kept of the field's old value and what each rule added (`written_by`) |
 | `noise` | from the distances above and the weights. For a threshold with weight row w (stored coordinates) and room d = its smallest distance: `linf` is the smallest d / (sum of the absolute values of w), `l2` the smallest d / (Euclidean norm of w), `single` the smallest d / (largest absolute value of w), and `rule` attains `linf`. Meaning: if the state at the start of a step is off by at most `linf` in every coordinate (or by at most `l2` in Euclidean norm, or by at most `single` in one coordinate only), no threshold argument enters (0, 1) at that step, so every threshold gives exactly the value it would have. `decision_linf` is the same for the sign of the margin. Computed only when exactness and cleanliness hold over the complete set |
 | `equivalence` | only with `--equiv`: see below |
 | `sizes` | `width`, `neurons`, `tokens`, `weights` (every stored number), `nonzero_weights`, `ops_per_step` (the largest number of nonzeros in a row of E, plus the nonzeros of W1 and of W2, plus one per neuron) and `ops_per_step_dense` (width + 2 * width * neurons + neurons) |
@@ -355,28 +389,38 @@ token sequence was covered (`exhaustive_to_depth`) and adds `evidence.sampled`: 
 
 **A rotated network that comes with its specification** (a `SPEC` with `rotate`, or a folder quill
 built rotated) is proved in two layers. The logic, in the field basis where arithmetic is exact,
-gives the six results above. Then the rotated float64 build is enumerated with the tolerance and
+gives the six results above. Then the rotated float64 build is enumerated in the rounded regime and
 compared with the logic state by state: `rotated.holds`, `seed`, `states`, `transitions`,
-`closure_residual`, `max_field_gap`, `min_distance`, `noise`, `difference`, grade `checked`. The
-overall grade is then `checked`, and the first line says why. `--no-rotate` proves the logic alone.
+`complete`, `closure_residual`, `kept_apart`, `max_field_gap`, `min_distance`, `noise`,
+`difference`, grade `checked`. The overall grade is then `checked`, and the first line says why. A
+fault of the float64 build refutes. A build that does not close as the logic does, because near
+states were kept apart where the logic leaves no room for rounding, is `undecided` (grade
+`undecided`), never `ok`. Thresholds exactly on an edge are exact in the logic but rounded off it in
+the build, and a hold that doubles that error loses the bit: the latch `tau A <- 2*in.a - 1`,
+`tau A <- 2*A - 2*in.a - 2*in.b - 1` proves in the logic, and rotated it forgets A after about 50
+holds (0.1.0 passed its rotated build as checked). `--no-rotate` proves the logic alone.
 
 **A folder quill did not build** (a planted-kit article) has no specification. Its rules are
 recovered from the weights (pairs of neurons that form a threshold or a clear) and named through
 the field directions in `manifest.json`. A rotated one is graded `checked`.
 
-Also in the result: `name`, `input`, `options` (`cap`, `tolerance`), `basis`, `arithmetic`
-(`exact` when no operation of any state update rounded, by the processor's inexact flag read around
-every step; `rounded` otherwise), `decisions` (how many deciding states emit and hold, the smallest
-|margin|, the distinct margins to 1e-9, and `arithmetic`: whether computing the margins rounded; a
-state decides if some token leads to it), `rules` (per rule: how often it fires, the values of z
-seen, its smallest distance), `fields` (up to 6 values each field takes, to 1e-9), `machines` (per
-`machine`: `reached`, `not_reached`, and `complete`, which says whether "not reached" is final),
-`state_table` (every state with its fields, decision, margin, where each token leads and a shortest
-path to it; present when there are at most 64 states; `--states` prints it as text), `evidence`
-(at the cap), `rotated` (two layers), `warnings`.
+Also in the result: `name`, `input`, `options` (`cap`, and `tolerance`: the 1e-9 of the rounded
+regime), `basis`, `arithmetic` (`exact` when no operation of any state update rounded, by the
+processor's inexact flag read around every step; `rounded` otherwise), `decisions` (how many
+deciding states emit and hold, the smallest |margin|, the distinct margins to 1e-9, and
+`arithmetic`: whether computing the margins rounded; a state decides if some token leads to it),
+`rules` (per rule: how often it fires, the values of z seen, its smallest distance), `fields` (up to
+6 values each field takes), `machines` (per `machine`: `reached`, `not_reached`, and `complete`,
+which says whether "not reached" is final), `state_table` (every state with its fields, decision,
+margin, where each token leads and a shortest path to it; present when there are at most 64 states;
+`--states` prints it as text), `evidence` (at the cap), `rotated` (two layers), `warnings`. The
+values of z and of the fields are as they are when the arithmetic is exact, and to 1e-9 when it
+rounds; the report prints a number in full wherever 1e-9 would hide what decides a verdict (a z of
+1 - 2^-40 is never shown as 1, nor a distance of 2^-40 as 0).
 
 Status: `ok` when every claim holds, `refuted` when one fails, `undecided` at the cap (or when the
-other side of `--equiv` stopped at the cap).
+other side of `--equiv` stopped at the cap, or when a rotated build does not close as its logic
+does).
 
 ### 4.3 `quill run SPEC|DIR` with tokens
 
@@ -417,7 +461,10 @@ data (`fields`, `tokens`, `rules`, `neurons`, `readout`, `notes`, `warnings`, `e
 - **Rules:** each with its source line, its meaning (the author's comment, or quill's own words for
   a shorthand rule), the statement that wrote it, and **when it fires**, read off the weights
   alone with every field taken as 0 or 1: `on one when A=0`. A case in which z would land
-  strictly inside (0, 1) is flagged as a possible ramp; `prove` says whether it is reachable.
+  strictly inside (0, 1) is flagged as a possible ramp; `prove` says whether it is reachable. In an
+  axis-aligned network the weights are read as stored and nothing is tolerated (a z of 1 - 2^-40 is a
+  possible ramp, not firing); in a rotated one they are read off along the field directions, with
+  rounding, and a z within 1e-9 of an edge counts as on it.
 - **Neurons:** one line each: its rule and half, its argument z, what it writes, when it is active.
 - **Readout:** the margin and the two rows.
 - **Expansions:** each shorthand statement and the primitive statements written for it, then the
@@ -473,16 +520,20 @@ with `first_difference_row`.
 
 ### 4.7 `quill --selftest`, `--about`, `--mcp`
 
-- **`--selftest`** runs 52 checks and writes no file: known answers from zlib and numpy
+- **`--selftest`** runs 61 checks and writes no file: known answers from zlib and numpy
   (`selftest_vectors.h`); 25 faulty specifications and their messages; the language (expressions,
   lists, `in.TOKEN`) and its printed-back form; the kernel against its written definition; the five kit articles built, proved
   exact, byte-compared with the kit's own weight files (their hashes are inside the executable), and compared with the planted truth on
   20,000 tokens, axis-aligned and rotated; ten equivalences; 200 random machines (2 to 8 states, 2
   to 6 tokens, written with explicit moves, `*`, unlisted pairs that hold, several tokens on one
   line and a random start state) simulated on 1,500 random tokens each and each proved equivalent
-  to its table; the three planted faults; the counter; the cap; the readout's inexact flag;
-  receipts; `run` and `explain`; the MCP server. If a `specs/` folder sits beside the executable it
-  must equal the examples inside it. Status `ok` or `refuted`, grade `checked`, exit code 0 or 1.
+  to its table; the three planted faults; the four near-edge drifts that 0.1.0 passed as `ok`, each
+  refuted at its first step with z and the field in full, and the same drift with rounded arithmetic
+  and in a rotated network without its specification; a threshold 2^-40 outside (0, 1), which
+  proves; thresholds exactly on an edge, whose rotated build is undecided; the counter; the cap; the
+  readout's inexact flag; receipts; `run` and `explain`; the MCP server. If a `specs/` folder sits
+  beside the executable it must equal the examples inside it (without one, that check is skipped
+  and 60 run). Status `ok` or `refuted`, grade `checked`, exit code 0 or 1.
 - **`--about`** prints one JSON object (with or without `--json`): `organ` ("quill"), `version`,
   `path`, `family`, `purpose`, `stage`, `verbs` (each with `verb`, `what` and `example`), `mcp`
   (`command`, `args`, `tools`, `register`), `health` (`ok` and `detail`: it builds and proves the
@@ -511,9 +562,9 @@ with `first_difference_row`.
 ### 5.1 One JSON object
 
 ```
-{"quill": "0.1.0", "verb": "prove", "status": "ok", "grade": "proved",
+{"quill": "0.1.1", "verb": "prove", "status": "ok", "grade": "proved",
  "result": {...}, "text": "prove parity: ok, grade proved",
- "receipt": {"id": "quill1:a1ce9378f749", "input_sha256": "...", "result_sha256": "..."},
+ "receipt": {"id": "quill1:555bc34ea3d4", "input_sha256": "...", "result_sha256": "..."},
  "meta": {"ms": 0.16}}
 ```
 
@@ -538,10 +589,10 @@ file), `E_INTERNAL`.
 
 | grade | meaning |
 |---|---|
-| `proved` | Every successor of every enumerated state is, bit for bit, an enumerated state. The kernel is a deterministic function on float64 states, so by induction no token sequence of any length leaves the set, and what was checked at every state and token holds for ever. When `arithmetic` is `exact`, no operation of any state update rounded: the claims about states and thresholds are also true of the stored weights taken as real numbers, in any order of evaluation (`decisions.arithmetic` says the same of the margins) |
-| `checked` | The set closed only within 1e-9 (a rotated basis rounds at every step), or the claim is a comparison with given data (`check-kit`). Everything was verified at every state and token and the largest gap is reported. It is not a proof for runs of unbounded length: rounding can accumulate along directions nothing rewrites |
+| `proved` | Every successor of every enumerated state is, bit for bit, an enumerated state. The kernel is a deterministic function on float64 states, so by induction no token sequence of any length leaves the set, and what was checked at every state and token holds for ever. When `arithmetic` is `exact`, no operation of any state update rounded and nothing was tolerated: the claims about states and thresholds are also true of the stored weights taken as real numbers, in any order of evaluation (`decisions.arithmetic` says the same of the margins) |
+| `checked` | The arithmetic rounds and the set closed only within 1e-9 (a rotated basis rounds at every step), or the claim is a comparison with given data (`check-kit`). Everything was verified at every state and token, a state was merged with a near one only where its noise margin shows that the gap changes nothing (4.2), and the largest gap is reported. It is not a proof for runs of unbounded length: rounding can accumulate along directions nothing rewrites |
 | `sampled` | Verified on random token sequences only; the seed and the count are stated. Evidence, attached to an `undecided` answer |
-| `undecided` | The enumeration stopped at the cap before closing |
+| `undecided` | The enumeration stopped at the cap before closing, or a rotated build did not close as its logic does |
 
 A claim that fails is graded by its witness: `proved` when the witness was computed without
 rounding, `checked` otherwise. The answer's grade: for status `ok`, the weakest grade among its
@@ -601,7 +652,8 @@ A network folder is **exactly the planted kit's**, so quill and the kit read eac
 Limits of a specification: width, fields, tokens and states of one machine up to 4,096; 1,000,000
 neurons and 8,000,000 entries in W1. Limits of a folder read: width and tokens up to 65,536,
 1,000,000 neurons. Token and state names are ASCII. Every named field must be 0 or 1 in every
-reachable state: a design that keeps other values in a field is refused by `prove`. Windows x64 only.
+reachable state (exactly, when the arithmetic is exact): a design that keeps other values in a field
+is refused by `prove`. Windows x64 only.
 
 Planned, not in this version:
 
@@ -618,7 +670,7 @@ Planned, not in this version:
 From the repository root, with the folder of the planted kit in the variable `QUILL_KIT`
 (`$QUILL_KIT/articles/R1_plain` is one of its article folders, section 4.5). Tests 3, 4 and 6 need
 the kit's articles, which are not part of this repository; the others need only this repository.
-Under each command is what it printed when version 0.1.0 was tagged (speeds vary with the
+Under each command is what it printed when version 0.1.1 was tagged (speeds vary with the
 machine's load).
 
 `bash tests/acceptance.sh` (Git Bash) runs tests 2 to 7 after a build: it prints each command with
@@ -630,7 +682,7 @@ ignores the copy) or from the environment.
    `obj/`, the compiler prints each source's name and nothing else:
 
    ```
-   build.bat
+   .\build.bat
    base.cpp
    npz.cpp
    net.cpp
@@ -650,7 +702,7 @@ ignores the copy) or from the environment.
 
    ```
    quill --selftest
-   SELFTEST: ALL PASS (52 checks)
+   SELFTEST: ALL PASS (61 checks)
    ```
 
 3. check-kit on the nine recurrent articles, `quill check-kit $QUILL_KIT/articles/NAME` for
@@ -704,10 +756,10 @@ ignores the copy) or from the environment.
    ```
    quill run $QUILL_KIT/articles/R1_plain --tokens-file $QUILL_KIT/articles/R1_plain/tokens.i32 --repeat 1000 --show 0
    run R1_plain: 8,000,000 steps, 3,520,000 emit, 4,480,000 hold, margins from -4 to 4
-     8,225,612 steps per second (8,000,000 steps in 0.972572 s, one thread, dense kernel)
+     8,898,734 steps per second (8,000,000 steps in 0.899004 s, one thread, dense kernel)
    ```
 
-   (5.4 to 8.6 million steps per second over the runs made while building, on a shared machine; the brief asks for 2 million.)
+   (8.8 to 8.9 million steps per second in the runs for 0.1.1, and 5.4 to 8.6 million over those made while building 0.1.0, on a shared machine; the brief asks for 2 million.)
 
 7. A counter modulo 3 with reset:
 

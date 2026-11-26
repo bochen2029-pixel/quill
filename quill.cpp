@@ -64,9 +64,11 @@ OPTIONS
 
 static const char* const kHelpTail = R"help(
 GRADES   proved     the states close bit for bit: true for every token sequence of any length
-         checked    verified to 1e-9 in float64 (a rotated basis rounds), or against given data
+                    (with exact arithmetic nothing at all is tolerated: a z 2^-40 inside (0, 1) fails)
+         checked    the arithmetic rounds: verified to 1e-9 in float64, merging a near state only
+                    where the gap can move no threshold; or checked against given data
          sampled    verified on random token sequences only (seed and count stated)
-         undecided  the enumeration stopped at the cap before closing
+         undecided  the enumeration stopped at the cap before closing, or a rotated build did not close
 
 EXIT CODES   0 ok   1 refuted (a proof or a check failed)   2 error (bad input)   3 undecided
 )help";

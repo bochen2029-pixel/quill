@@ -42,8 +42,9 @@ JV tools_list() {
                     { "spec" }));
     tools.push(tool("quill_prove",
                     "Prove a specification exact by enumerating every reachable state. Returns, each with a grade (proved, checked, sampled, "
-                    "undecided): the number of reachable states and transitions; exactness (every threshold argument z outside (0, 1), or the "
-                    "state, token and rule where it is not); cleanliness (every field 0 or 1, or the first that is not and which rules wrote it); "
+                    "undecided): the number of reachable states and transitions; exactness (every threshold argument z outside (0, 1), with "
+                    "no tolerance at all when the arithmetic is exact, or the state, token and rule where it is not); cleanliness (every field "
+                    "0 or 1, exactly when the arithmetic is exact and to 1e-9 when it rounds, or the first that is not and which rules wrote it); "
                     "noise tolerance; sizes; and, with `equiv`, whether it makes the same decisions as a transition table or another "
                     "specification on every token sequence, or a shortest sequence on which they differ. status is ok, refuted or undecided.",
                     { { "spec", prop("string", spec) },

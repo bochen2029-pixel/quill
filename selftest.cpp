@@ -575,6 +575,108 @@ void test_proofs(Suite& t) {
         t.check(ok, std::string(f.name) + ": refused, naming the state, the token and the rule", ok ? msg : p.text.substr(0, 300));
     }
     {
+        // The four near-edge drifts that quill 0.1.0 passed as ok (found by an independent review). Every step is exact, so
+        // nothing is tolerated: each is refuted at the first step where it shows, with z and the field printed in full.
+        // (0.1.0 merged A = 1 - 2^-40 into A = 1, printed z = 1, and never saw the excess double.)
+        const double eps = 0x1p-40;
+        struct Drift { const char* name; std::vector<const char*> must; double z; const char* token; const char* path; };
+        const Drift drifts[] = {
+            { "fault_edge_drift", { "rule 2 (line 8: tau A <- 2*A - 2*in.a - 2*in.b - 1.0000000000009095)", "has z = 0.9999999999990905, strictly inside (0, 1)",
+                                    "in state {A=1} on token c (reached by: a)" }, 1.0 - eps, "c", "a" },
+            { "fault_edge_decimal", { "rule 2 (line 7: tau A <- 2*A - 2*in.a - 2*in.b - 1.000000000001)", "has z = 0.9999999999989999, strictly inside (0, 1)",
+                                      "in state {A=1} on token c (reached by: a)" }, (-1.0 - 1e-12) + 2.0, "c", "a" },
+            { "fault_creep_up", { "rule 1 (line 6: tau D <- 2*D + 9.094947017729282e-13)", "has z = 9.094947017729282e-13, strictly inside (0, 1)",
+                                  "in state {all fields 0} on token a (reached by: the start state)" }, eps, "a", "" },
+            { "fault_creep_down", { "rule 1 (line 7: tau A <- 2*A - 1.0000000000009095)", "has z = 0.9999999999990905, strictly inside (0, 1)",
+                                    "in state {A=1} on token a (reached by: the start state)" }, 1.0 - eps, "a", "" },
+        };
+        for (const auto& f : drifts) {
+            const Answer p = verb_prove(inline_spec(example(f.name)->text), ProveOptions(), nullptr);
+            const JV* ex = dig(p.result, { "results", "exactness" });
+            const JV* cl = dig(p.result, { "results", "cleanliness" });
+            bool ok = p.status == "refuted" && p.exit_code() == 1 && p.grade == "proved" && dig_str(p.result, { "arithmetic" }) == "exact" && ex && cl &&
+                      ex->get("holds")->t == JV::Bool && !ex->get("holds")->b && cl->get("holds")->t == JV::Bool && !cl->get("holds")->b;
+            std::string msg;
+            if (ok) {
+                const JV& v = ex->get("violations")->arr[0];
+                msg = dig_str(v, { "message" });
+                for (const char* part : f.must) ok = ok && contains(msg, part);
+                std::string path;
+                for (const auto& x : v.get("path")->arr) path += (path.empty() ? "" : " ") + x.s;
+                ok = ok && dig_num(v, { "z" }) == f.z && dig_str(v, { "token" }) == f.token && path == f.path &&
+                     dig_num(cl->get("violations")->arr[0], { "value" }) == f.z;   // the field as it is, not snapped to 0 or 1
+            }
+            t.check(ok, std::string(f.name) + ": refused at the first step where it shows (exact arithmetic tolerates nothing), naming the state, the token and the rule",
+                    ok ? msg : p.text.substr(0, 300));
+        }
+    }
+    {
+        // --equiv against the ideal latch no longer finds the same decision after every sequence, and explain no longer
+        // says the hold fires at z = 1 - 2^-40: it is a possible ramp
+        const Source ideal = inline_spec("{\"name\": \"latch\", \"tokens\": [\"a\", \"b\", \"c\"], \"delta\": [[1, 0, 0], [1, 0, 1]], \"init\": 0, \"emit\": [1]}");
+        const Answer p = verb_prove(inline_spec(example("fault_edge_drift")->text), ProveOptions(), &ideal);
+        const JV* q = dig(p.result, { "results", "equivalence" });
+        const Firing hold = firing(model_from_text(example("fault_edge_drift")->text), 1);
+        t.check(p.status == "refuted" && q && q->get("holds") && q->get("holds")->t == JV::Null && hold.known && hold.when == "never, while the fields are 0 or 1" &&
+                    hold.ramp == "on c when A=1",
+                "fault_edge_drift: --equiv the ideal latch is not passed as equivalent, and explain reads its hold on c as a possible ramp, not as firing",
+                hold.when + " | " + hold.ramp);
+    }
+    {
+        // When the arithmetic rounds (2.2 and 0.7 are not exact in binary), a z inside (0, 1) by more than the rounding of
+        // its step and state explains is the ramp all the same: the drift is refuted at once, not merged away
+        const Answer p = verb_prove(inline_spec("net rounded_drift\ntokens a b c\nfields A\ntau A <- 2.2*in.a - 0.7\n"
+                                                "tau A <- 2*A - 2*in.a - 2*in.b - 1 - 1/1099511627776\nclear A\nreadout 8*A - 4\n"),
+                                    ProveOptions(), nullptr);
+        const JV* v = dig(p.result, { "results", "exactness", "violations" });
+        bool ok = p.status == "refuted" && dig_str(p.result, { "arithmetic" }) == "rounded" && v && !v->arr.empty();
+        if (ok) {
+            const JV& h = v->arr[0];
+            ok = dig_str(h, { "token" }) == "c" && h.get("path")->arr.size() == 1 && h.get("path")->arr[0].s == "a" && dig_num(h, { "z" }) < 1 - 1e-13;
+        }
+        t.check(ok, "rounded arithmetic: the same drift beside a 2.2 weight is refused at its first step, as inside (0, 1) by more than rounding explains",
+                p.text.substr(0, p.text.find('\n')));
+    }
+    {
+        // A rotated network proved without its specification keeps the 1e-9 tolerance for z and for fields, but merges a near
+        // state only where the gap can move no threshold: the drift is followed step by step and refuted where it passes 1e-9
+        Model m = model_from_text(example("fault_edge_drift")->text, 2, 7);
+        m.spec_text.clear();
+        const Proof p = prove(m, nullptr, ProveOptions(), nullptr, nullptr);
+        t.check(p.status == "refuted" && dig_int(p.result, { "results", "reachable", "kept_apart" }) > 0 && dig_str(p.result, { "basis" }) == "rotated",
+                "the drifting latch rotated and proved on its own: near states are kept apart where the gap could move a threshold, so the drift is "
+                "followed until it passes 1e-9, and refuted",
+                p.text.substr(0, p.text.find('\n')));
+    }
+    {
+        // An exact threshold 2^-40 outside (0, 1) proves; its distance and its noise tolerance are printed in full, not as 0
+        const Answer p = verb_prove(inline_spec("net near\ntokens a b\nfields A\ntau A <- 2*in.a - 1 + 1/1099511627776\nclear A\nreadout 8*A - 4\n"),
+                                    ProveOptions(), nullptr);
+        std::string edge;
+        if (const JV* w = dig(p.result, { "warnings" }))
+            for (const auto& x : w->arr)
+                if (dig_str(x, { "code" }) == "W_EDGE") edge = dig_str(x, { "message" });
+        t.check(p.status == "ok" && p.grade == "proved" && dig_num(p.result, { "results", "exactness", "min_distance" }) == 0x1p-40 &&
+                    contains(p.text, "smallest distance 9.094947017729282e-13") && contains(p.text, "an error of up to 4.547473508864641e-13") &&
+                    contains(edge, "lands 9.1e-13 outside (0, 1)"),
+                "a threshold 2^-40 outside (0, 1) is exact and proves; its distance and its noise tolerance are printed in full, and W_EDGE says how far", edge);
+    }
+    {
+        // Thresholds exactly on an edge are exact in the logic, but the rotated float64 build rounds them off the edge, and
+        // this latch's hold doubles the error until the bit is lost (after about 50 holds): the rotated layer does not
+        // close, so the answer is undecided, not ok
+        ProveOptions small;
+        small.cap = 5000;
+        const Answer p = verb_prove(inline_spec("net edge_exact\ntokens a b c\nfields A\ntau A <- 2*in.a - 1\ntau A <- 2*A - 2*in.a - 2*in.b - 1\nclear A\n"
+                                                "readout 8*A - 4\n", 2, 7),
+                                    small, nullptr);
+        const JV* rh = dig(p.result, { "rotated", "holds" });
+        t.check(p.status == "undecided" && dig_str(p.result, { "results", "exactness", "grade" }) == "proved" && rh && rh->t == JV::Null &&
+                    dig_int(p.result, { "rotated", "kept_apart" }) > 0,
+                "thresholds exactly on an edge: the logic proves, and its rotated float64 build, which loses the bit after about 50 holds, is undecided, not ok",
+                p.text.substr(0, p.text.find('\n')));
+    }
+    {
         const Answer p = verb_prove(inline_spec(example("counter_mod3")->text), ProveOptions(), nullptr);
         const JV* mc = dig(p.result, { "machines" });
         const bool ok = p.status == "ok" && p.grade == "proved" && dig_int(p.result, { "results", "reachable", "states" }) == 3 &&

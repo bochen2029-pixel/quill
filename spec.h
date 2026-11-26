@@ -161,8 +161,10 @@ JV manifest_json(const Model& m, const std::string& weights_sha256);
 std::string explain_markdown(const Model& m);
 JV explain_json(const Model& m);
 JV sizes_json(const Network& net);                               // width, neurons, weights, operations per step
-std::string state_text(const Model& m, const double* state);     // "{A=1}" : the fields that are not 0
-JV state_json(const Model& m, const double* state);              // every named field but `one`, rounded to 1e-9
+// "{A=1}": the fields that are not 0, and every named field but `one`. Rounded to 1e-9, unless `exact` (prove, when
+// nothing rounded: a field of 2^-40 is then 2^-40, not 0).
+std::string state_text(const Model& m, const double* state, bool exact = false);
+JV state_json(const Model& m, const double* state, bool exact = false);
 double snap9(double v);                                          // to the 1e-9 grid when it is that close to it
 // When a rule fires, read off its weights: "on one when A=0". Empty when it reads too many fields.
 struct Firing {
