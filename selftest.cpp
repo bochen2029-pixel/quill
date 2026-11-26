@@ -515,6 +515,16 @@ void test_proofs(Suite& t) {
                 "a threshold that lands exactly on 0 and on 1 is exact, with distance 0, noise tolerance 0 and a warning");
     }
     {
+        // 2.2 and 0.7 are not exact in binary: the sums round, the states close only to 2e-16, and quill says so
+        const Answer p = verb_prove(inline_spec("net rounded\ntokens a b\nfields A\ntau A <- 2.2*in.a - 2.2*A - 0.7\n"
+                                                "tau A <- 2.2*A - 2.2*in.a - 0.7\nclear A\nreadout 8*A - 4\n"),
+                                    ProveOptions(), nullptr);
+        const double gap = dig_num(p.result, { "results", "reachable", "closure_residual" });
+        t.check(p.status == "ok" && p.grade == "checked" && dig_str(p.result, { "arithmetic" }) == "rounded" && gap > 0 && gap < 1e-12 &&
+                    dig_int(p.result, { "results", "reachable", "states" }) == 2,
+                "weights that are not exact in binary: the same network is graded checked, not proved, and reported as rounded");
+    }
+    {
         const Answer a = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr), b = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr);
         const JV ra = receipt_json(a), rb = receipt_json(b);
         JV parsed;
