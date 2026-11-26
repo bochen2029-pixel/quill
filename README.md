@@ -621,6 +621,11 @@ the kit's articles, which are not part of this repository; the others need only 
 Under each command is what it printed when version 0.1.0 was tagged (speeds vary with the
 machine's load).
 
+`bash tests/acceptance.sh` (Git Bash) runs tests 2 to 7 after a build: it prints each command with
+its output and exit code, and ends with how many checks came out as expected (exit code 0 only when
+all did). It reads `QUILL_KIT` from `tests/paths.local.env` (copy `tests/paths.example.env`; git
+ignores the copy) or from the environment.
+
 1. Build with no warnings at `/W4` (`/WX` turns any warning into a failed build). From an empty
    `obj/`, the compiler prints each source's name and nothing else:
 
@@ -731,6 +736,7 @@ examples.cpp          the specifications inside the executable, and the language
 selftest.cpp          the self-test;  selftest_vectors.h: its known answers from zlib and numpy
 quill.h, base.cpp     formatting, SHA-256, files, JSON
 specs/                the examples as files (quill examples --write specs)
+tests/                acceptance.sh (tests 2 to 7 of section 8);  paths.example.env: where it finds the kit
 docs/BRIEF.md         what was asked;  docs/devlog.md: what was decided, and why
 ```
 

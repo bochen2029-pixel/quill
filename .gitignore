@@ -10,3 +10,6 @@ obj/
 # throwaway oracles and test output; never part of the tool
 _scratch/
 out/
+
+# where the acceptance script finds the planted kit on this machine (copy tests/paths.example.env)
+tests/paths.local.env
