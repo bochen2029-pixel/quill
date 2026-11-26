@@ -18,11 +18,14 @@ repository. quill reads and writes the kit's network folders (section 6), and ne
 the kit to build, to pass its self-test or to run; only `check-kit` reads the kit's article
 folders, each a network with a recorded run (section 4.5).
 
-Version 0.1.1 covers the **recurrent class**: one step per token, no attention.
-C++20, operating-system APIs only, no third-party code, about 1.2 MB. It corrects a defect of
-0.1.0, whose `prove` could pass as `ok` a network that leaves its clean values by less than 1e-9,
-doubles that at every step and loses its bit after a few dozen steps (section 4.2, "How states,
-fields and thresholds are compared").
+Version 0.1.2 covers the **recurrent class**: one step per token, no attention.
+C++20, operating-system APIs only, no third-party code, about 1.2 MB.
+
+It corrects two defects of earlier versions; `CHANGELOG.md` has the details:
+- 0.1.0's `prove` could pass as `ok` a network that leaves its clean values by less than 1e-9,
+  doubles that at every step and loses its bit after a few dozen steps (section 4.2, "How states,
+  fields and thresholds are compared").
+- 0.1.1's `prove` read out of bounds, and could crash, when the start state itself is not clean.
 
 This file is the contract: what every verb promises, exactly. Every example output below was
 printed by this version; only timings can differ from one run to the next.
@@ -45,7 +48,7 @@ prove parity: ok, grade proved
   noise        an error of up to 0.083333333 on every coordinate of the state cannot move a threshold into (0, 1); 0.144337567 in Euclidean norm; 0.25 on one coordinate alone (coordinates are fields)   [proved]
   sizes        width 32, 10 neurons, 844 weights (37 not zero), 37 operations per step (682 dense)   [proved]
   decisions    emit in 1 state, hold in 1; smallest |margin| 4
-  receipt      quill1:555bc34ea3d4  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 41657ddd6140d967a5588de77ab80352e471b0091e05944f6d95431271528a1f
+  receipt      quill1:881624541aaa  input a59b11d5775063b2c544aba9897cf611fd67817ada4062b85717ae234780bc48  result 41657ddd6140d967a5588de77ab80352e471b0091e05944f6d95431271528a1f
 
 $ quill run specs/parity.spec --tokens "one one skip one zero"
 run parity: 5 steps, 2 emit, 3 hold, margins from -4 to 4
@@ -93,7 +96,7 @@ prove fault_two_setters: REFUTED, grade proved
   (PowerShell does not run a script from the current folder by its bare name).
 - A clean build prints the twelve file names and `OK: quill.exe`. Any warning stops the build (`/WX`).
 - `/fp:strict` is deliberate: nothing is fused or reordered, and `prove` reads the processor's inexact flag.
-- `quill --selftest` then checks the executable from the inside (61 checks, about a second, no file written).
+- `quill --selftest` then checks the executable from the inside (64 checks, about a second, no file written).
   The last check compares a `specs/` folder beside the executable with the examples inside it; an
   executable with no `specs/` beside it (the release's `quill.exe` on its own) skips that check, says
   so, and runs 60.
@@ -520,7 +523,7 @@ with `first_difference_row`.
 
 ### 4.7 `quill --selftest`, `--about`, `--mcp`
 
-- **`--selftest`** runs 61 checks and writes no file: known answers from zlib and numpy
+- **`--selftest`** runs 64 checks and writes no file: known answers from zlib and numpy
   (`selftest_vectors.h`); 25 faulty specifications and their messages; the language (expressions,
   lists, `in.TOKEN`) and its printed-back form; the kernel against its written definition; the five kit articles built, proved
   exact, byte-compared with the kit's own weight files (their hashes are inside the executable), and compared with the planted truth on
@@ -562,9 +565,9 @@ with `first_difference_row`.
 ### 5.1 One JSON object
 
 ```
-{"quill": "0.1.1", "verb": "prove", "status": "ok", "grade": "proved",
+{"quill": "0.1.2", "verb": "prove", "status": "ok", "grade": "proved",
  "result": {...}, "text": "prove parity: ok, grade proved",
- "receipt": {"id": "quill1:555bc34ea3d4", "input_sha256": "...", "result_sha256": "..."},
+ "receipt": {"id": "quill1:881624541aaa", "input_sha256": "...", "result_sha256": "..."},
  "meta": {"ms": 0.16}}
 ```
 
@@ -670,7 +673,7 @@ Planned, not in this version:
 From the repository root, with the folder of the planted kit in the variable `QUILL_KIT`
 (`$QUILL_KIT/articles/R1_plain` is one of its article folders, section 4.5). Tests 3, 4 and 6 need
 the kit's articles, which are not part of this repository; the others need only this repository.
-Under each command is what it printed when version 0.1.1 was tagged (speeds vary with the
+Under each command is what it printed when version 0.1.2 was tagged (speeds vary with the
 machine's load).
 
 `bash tests/acceptance.sh` (Git Bash) runs tests 2 to 7 after a build: it prints each command with
@@ -702,7 +705,7 @@ ignores the copy) or from the environment.
 
    ```
    quill --selftest
-   SELFTEST: ALL PASS (61 checks)
+   SELFTEST: ALL PASS (64 checks)
    ```
 
 3. check-kit on the nine recurrent articles, `quill check-kit $QUILL_KIT/articles/NAME` for

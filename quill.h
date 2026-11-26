@@ -13,7 +13,7 @@
 
 namespace quill {
 
-constexpr const char* kVersion = "0.1.1";
+constexpr const char* kVersion = "0.1.2";
 
 // The one tolerance of the tool (BRIEF section 5), for arithmetic that rounds: two states may be merged,
 // a field is clean, and a threshold argument may be on an edge, only when the numbers agree to this.

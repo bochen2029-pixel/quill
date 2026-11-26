@@ -733,6 +733,35 @@ void test_proofs(Suite& t) {
                 "stored); a readout of 1e-20*A + B - 0.5 rounds while its states stay exact");
     }
     {
+        // A start state that is not clean (found by an outside review of 0.1.1). Nothing is expanded, so no threshold is
+        // evaluated; 0.1.1 then indexed its per-rule table with -1 and crashed, printed garbage or ran out of memory. Each
+        // case must be refuted cleanly, in the text and in the JSON: axis-aligned, rotated (the two-layer proof), and the
+        // review's own crash3.spec.
+        struct Unclean { const char* what; const char* text; const char* field; };
+        const Unclean cases[] = {
+            { "init A=2", "net unclean\ntokens a b\nfields A\ninit A=2\ntau A <- 2*in.a - 0.5\nclear A\nreadout 8*A - 4\n", "field A is 2" },
+            { "init A=2, rotated", "net unclean_rot\ntokens a b\nfields A\ninit A=2\ntau A <- 2*in.a - 0.5\nclear A\nreadout 8*A - 4\nrotate 7\n",
+              "field A is 2" },
+            { "the review's crash3.spec", "net c3\ntokens t0\nfields F0 F1 F2\ninit F1=2 F2=2\ntau F2 <- -4*F2 - 1*F1 - 2\nclear F0 F1 F2\n"
+                                          "readout 2*F0 + 2*F2\n", "field F1 is 2" },
+        };
+        for (const auto& u : cases) {
+            const Answer p = verb_prove(inline_spec(u.text), ProveOptions(), nullptr);
+            JV parsed;
+            std::string err;
+            const JV* cl = dig(p.result, { "results", "cleanliness" });
+            const JV* ex = dig(p.result, { "results", "exactness" });
+            bool ok = p.status == "refuted" && p.exit_code() == 1 && dig_int(p.result, { "results", "reachable", "states" }) == 1 &&
+                      dig_int(p.result, { "results", "reachable", "transitions" }) == 0 && cl && cl->get("holds") && cl->get("holds")->t == JV::Bool &&
+                      !cl->get("holds")->b && ex && ex->get("min_distance") && ex->get("min_distance")->t == JV::Null &&
+                      contains(p.text, "no threshold was evaluated: no state was expanded") &&
+                      contains(p.text, (std::string(u.field) + ", not 0 or 1, in the start state").c_str());
+            ok = ok && json_parse(answer_json(p), parsed, err) && dig_str(parsed, { "status" }) == "refuted";
+            t.check(ok, std::string("a start state that is not clean (") + u.what + "): refuted cleanly, no threshold evaluated, the field named, in text and JSON",
+                    ok ? std::string() : p.text.substr(0, 300) + err);
+        }
+    }
+    {
         const Answer a = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr), b = verb_prove(inline_spec(example("R4_two_bits")->text), ProveOptions(), nullptr);
         const JV ra = receipt_json(a), rb = receipt_json(b);
         JV parsed;

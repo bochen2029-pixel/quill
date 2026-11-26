@@ -860,6 +860,9 @@ Proof prove(const Model& m, const Model* build, const ProveOptions& opt, const M
             line = "FAILS: " + hit_text(m, h);
             if (e.ramp_total > 1) line += ssprintf("; %zu such cases in all", e.ramp_total);
         } else if (ck.taus.empty()) line = "the network has no threshold";
+        // No step was taken (the start state itself is not clean, so it was not expanded): no threshold was
+        // evaluated and min_rule is -1. Found by an outside review: 0.1.1 indexed e.rule with it here.
+        else if (min_rule < 0) line = "no threshold was evaluated: no state was expanded";
         else {
             const RuleStat& st = e.rule[(size_t)min_rule];
             line = ssprintf("all %s threshold%s outside (0, 1) at every %sstate and token%s; smallest distance %s (", commas(ck.taus.size()).c_str(),

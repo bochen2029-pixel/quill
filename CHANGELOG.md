@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.2 (2026-11-26)
+
+A crash fix in `prove`, found by an outside review.
+
+**The defect.** When the start state itself is not clean (a named field that is not 0 or 1, as with
+`init A=2`), `prove` expands no state, so it evaluates no threshold and the index of the closest
+threshold stays -1. The JSON branch of the exactness result checked for that; the text branch did not,
+and read the per-rule table at index -1. The result was undefined behaviour:
+- on Windows, a crash (access violation) in most runs;
+- otherwise garbage in the report, or a spurious `E_LIMIT` "out of memory";
+- through `--mcp`, the server could die.
+
+The verdict, when one was printed, was not affected: such a network is refuted by its start state.
+
+**The fix.** One line. With no threshold evaluated, the exactness line now says "no threshold was
+evaluated: no state was expanded", and the start state's field is reported as the fault.
+
+**Checked.**
+- An audit of every other index in `prove` that can be -1 when nothing was evaluated or expanded:
+  - the JSON branch of the exactness result, the noise result, the state table, the deciding states
+    and both sides of `--equiv` were already guarded;
+  - no other unguarded index was found.
+- Under AddressSanitizer, 19 edge cases. On 0.1.1, 12 memory errors: every `prove` of an unclean start,
+  whether axis-aligned, rotated, from a network folder, with `--json`, `--states`, `--equiv` or
+  `--cap 1`, and over `--mcp`. On 0.1.2, none. The self-test under the sanitizer is clean.
+- Three self-test cases (64 checks in all): an unclean start axis-aligned, rotated, and the review's
+  own `crash3.spec`, each refuted cleanly in the text and in the JSON. With 0.1.1's `prove.cpp`, the
+  sanitizer stops at the first of them.
+- The review's own fuzzers, run on Windows against this build:
+  - 20,000 generated specifications against its exact-rational reference model, with 0 differences
+    in the 19,749 that stay in exact arithmetic. The released 0.1.1 crashed on 659 of the same specs
+    and refused 8 more with "out of memory".
+  - 4,000 specifications in rounded arithmetic checked by an independent float64 kernel: 0 findings.
+  - 3,000 random `--equiv` machines: 0 problems.
+  - 7,500 text mutants, 1,500 of them under the sanitizer: no crash and no sanitizer error.
+
+**Known, and not changed in this version** (both reported by the same review):
+- `prove --rotate` grows about sixteen times slower per doubling of the width. At the largest width a
+  specification allows, 4096, it does not finish in minutes. The mutation fuzzer's only timeouts were
+  `width 4096` with `--rotate`.
+- A constant that float64 cannot represent is rounded where it is stored, without a warning. For
+  example `- 4.5 + 1/4503599627370496` is stored and printed back as `- 4.5`. The proof is about the
+  stored network, as section 4.2 says, but nothing points out the difference.
+
 ## 0.1.1 (2026-11-26)
 
 A correction to `prove`, found by an independent adversarial review.

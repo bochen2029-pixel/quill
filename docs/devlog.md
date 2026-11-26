@@ -464,3 +464,42 @@ which from then on was its only writer. That session:
   - every shipped specification gives the same verdict, states and transitions as 0.1.0, apart from
     the four new planted faults, which went from `ok` to refuted;
   - the cleanse gate and scan, clean.
+
+## 2026-11-26, session 4: quill 0.1.2, a crash on an unclean start state
+
+### 24. The defect, and who found it
+
+An outside review of the public repository, run by a Claude web session on Linux and passed on by the
+owner, found that `prove` reads out of bounds when the start state is not clean: `init A=2`, for example.
+The commissioning session gave the fix to the session that wrote the 0.1.1 review, again as the only
+writer. The review shipped an audit kit with its reference model, fuzzers, two reproducers and a
+one-line patch. Each was read before anything in it was run.
+
+### 25. What was done
+
+- **The line.** In `prove.cpp`, `else if (min_rule < 0) line = "no threshold was evaluated: no state
+  was expanded";` goes before the `else` that indexes `e.rule[min_rule]`, with the review's wording.
+- **The audit.** Every index in `prove.cpp` that can be -1 when nothing is evaluated or expanded:
+  `min_rule`; `RuleStat::state` and `token` (read only when `cases > 0`); the noise result's `at`
+  (guarded); `e.next` entries of unexpanded states (guarded in the deciding states, the state table and
+  both sides of `--equiv`); and the `sampled_hits[0]` and `ramps[0]` / `dirties[0]` uses (reached only
+  when a fault was recorded). Only the one line was unguarded.
+- **AddressSanitizer** (MSVC `/fsanitize=address`, a scratch build). 19 edge cases:
+  - unclean starts with `--json`, `--states`, `--equiv`, `--cap 1`, `--rotate`, a `rotate` line,
+    `init A=0.5`, no tau at all, the other side of `--equiv` unclean, a network folder, `explain`,
+    `run`, `--mcp`, and the self-test;
+  - 12 errors on 0.1.1, all the same read; none with the fix.
+  - The new self-test cases with 0.1.1's `prove.cpp`: the sanitizer stops at the first of them.
+- **Self-test.** Three cases, 64 checks in all: an unclean start axis-aligned and rotated, and the
+  review's `crash3.spec`. Each must be refuted with 1 state and 0 transitions, a null `min_distance`,
+  the two sentences in the text, and a JSON answer that parses.
+- **The review's fuzzers, on Windows, against this build.**
+  - `fuzz.py 20000 2`: 19,749 specifications in exact arithmetic, 0 differences. 0.1.1 crashed on 659
+    of the same seeds.
+  - The other 251 are rounded in fact. A partial sum such as `-0.5 - 2^-52` plus `-2` cannot be stored
+    exactly; the fuzzer lists them as "rounded on a dyadic spec", and the review counts them apart.
+  - `qfloat.py 4000 8`: 0 findings. `equiv_fuzz.py 3000 5`: 0 problems.
+  - `mutfuzz.py`: 1,500 mutants under the sanitizer and 6,000 on the release build, no crash. Three
+    timeouts, all `width 4096` with `--rotate`: the known cost of a rotated proof at that width.
+- **Not changed** (CHANGELOG, "Known"): the rotated proof's cost at large widths; a constant that
+  float64 cannot represent is rounded where it is stored, without a warning.
